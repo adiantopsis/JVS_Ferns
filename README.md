@@ -1,18 +1,18 @@
 
-# Zenodo Data
+## Dataset from JVS submitted Article
 
 Machado, D., Jarenkow, J. A., & Seger, G. (2025). Data from: WHAT DOES FUNCTIONAL DIVERSITY AND PHYLOGENETIC SIGNAL REVEAL ABOUT SOUTHERN BRAZILIAN TERRESTRIAL FERNS' ENVIRONMENTAL PREFERENCES? [Data set]. In Journal of Vegetation Science (2.0). Zenodo. https://doi.org/10.5281/zenodo.17341176
 
-## Title: 
+### Title: 
 
 **What does functional diversity and phylogenetic signal reveal about Southern Brazilian terrestrial ferns' environmental preferences?**
 
 
-## **Authors:**
+### **Authors:**
 
 _Machado, Denilson; Jarenkow, João André & Seger, Guilherme_
 
-## **Abstract:**
+### **Abstract:**
 
 Questions: Our study focuses on the following questions: 1) Do the climatic and edaphic conditions of the Southern Brazilian Atlantic Forest impact terrestrial ferns' functional diversity? 2) Which morphological functional traits are most relevant for terrestrial ferns in response to climatic and edaphic changes? 3) If there are trait-environment relationships, what adaptive eco-evolutionary mechanisms can be inferred from them?
 
@@ -24,6 +24,3 @@ Results: The functional diversity of terrestrial ferns correlates with rainfall 
 
 Conclusions: Combining functional and phylogenetic information on terrestrial ferns indicates that species morphology response highly depends on the scale observed. Our analyses demonstrate that climatic and not edaphic factors are the primary drivers of trait diversity in terrestrial ferns within the Subtropical Atlantic Forest, influencing most evaluated traits. These findings may help predict the distribution of terrestrial ferns amidst the increasing trend of land use and cover changes in the Atlantic Forest domain.
 
-# How citate:
-
-Machado, D., Jarenkow, J. A., & Seger, G. (2025). Data from: WHAT DOES FUNCTIONAL DIVERSITY AND PHYLOGENETIC SIGNAL REVEAL ABOUT SOUTHERN BRAZILIAN TERRESTRIAL FERNS' ENVIRONMENTAL PREFERENCES? [Data set]. In Journal of Vegetation Science (2.0). Zenodo. https://doi.org/10.5281/zenodo.17341176
