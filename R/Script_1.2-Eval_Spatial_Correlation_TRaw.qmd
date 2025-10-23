@@ -1,0 +1,195 @@
+# 5.1. Removing Spatial Correlation in Mods. w/ Raw Traits 
+Here we will test spatial correlation at model residuals. To do so we will use spdep and SoDA package, the latter was used to transform decimal degree coordinates into cartesian. We followed the Appendix S2, sect. 4 of Bauman et al., (2018) to mensure Moran's I and correct spatial autocorrelation (if needed).
+
+# Function 
+This is a function to hurry up de analytical proceed.
+```{r}
+test_mem <- function(res, lw, nmodel = NULL) {
+  # Select Moran’s Eigenvector Maps (MEMs) that explain spatial autocorrelation in model residuals
+  mem <- mem.select(res, lw, method = "MIR", nperm = 999, p.adjust = T)
+
+  # Store global Moran’s I value and its p-value
+  sac <- data.frame(
+    I = mem$global.test$obs,
+    Pvalue = mem$global.test$pvalue
+  ) %>%
+    mutate(model = nmodel, .before = I) %>%
+    `rownames<-`(NULL)
+
+  # If spatial structure is detected (MEMs selected), return relevant info
+  if (length(mem) > 1) {
+    message('Check MEM data for eigenvectors...')
+    mem_data <- list(
+      sac = sac,
+      selected.MEM = mem$MEM.select,
+      summary = mem$summary
+    )
+    return(mem_data)
+  } else {
+    message('No MEM selected...')
+    return(sac)  # Return only Moran's I info if no MEMs were selected
+  }
+}
+```
+# Packages
+```{r}
+# devtools::install_github("cran/SoDA") #install SoDA to deal with coords
+library(sp)
+require(spdep)
+library(sf)
+library(adespatial)
+library(SoDA)
+library(readxl)
+library(tidyverse)
+library(openxlsx)
+```
+# Load data
+Transforming coords from latlong to UTM to enable usage of Euclidean distance.
+
+```{r}
+# Read coordinates and prepare environmental + community-weighted mean (CWM) trait data
+coords <- read_xlsx("data/data_ferns.xlsx", sheet = "e_matrix")
+x_ncor <- coords  # Keep a copy of the original coordinate data
+coords <- subset(coords, select = c("Long", "Lat"))  # Select only the spatial coordinates
+dim(coords)  # Check dimensions
+
+# Load CWM trait values and models previously fit
+cwm_values <- readRDS('data/cwm_values_raw.RDS')
+nice_mods <- read_xlsx('outputs/cwm_raw_results.xlsx', sheet = 3)
+```
+
+# Creating a cartesian coordinates df
+```{r}
+# Combine coordinates and traits into one data frame
+all_df <- coords %>%
+  `colnames<-`(c("long", "lat")) %>%
+  cbind.data.frame(cwm_values, x_ncor)
+
+# Convert from lat/long (degrees) to Cartesian (meters) for Euclidean distance computation
+df_xy <- SoDA::geoXY(
+  latitude = coords$Lat,
+  longitude = coords$Long,
+  unit = 1000  # Convert units to kilometers
+)
+dist <- dist(df_xy)  # Euclidean distance between sites
+```
+ 
+# Spatial weighted matrix 
+```{r}
+# Build a neighborhood structure 
+nb <- chooseCN(coordinates(df_xy), type = 4, plot.nb = FALSE)
+
+# Compute distances between neighbors
+distnb <- nbdists(nb, df_xy)
+
+# Convert distances to similarity weights: inverse distance (normalized)
+fdist <- lapply(distnb, function(x) 1 - x / max(dist(df_xy)))
+
+# Convert neighborhood list into a spatial weights object
+lw <- nb2listw(nb, style = 'B', glist = fdist, zero.policy = TRUE)
+```
+
+# Creating models and extracting resids.
+
+Each block below fits a linear model with raw traits ~ environmental predictors. Then it extracts residuals and tests them for spatial autocorrelation using test_mem().
+
+```{r}
+# nice_mods
+
+sac_diam <- lm(
+  diam ~ ann_prec * prec_seas + plot_size + samp_size,
+  data = all_df
+) %>%
+  residuals(.) %>%
+  test_mem(., lw, nmodel = 'Rhizome diameter ~ AR * RS')
+
+sac_rcomp <- lm(
+  r_comp ~ nitrogen + plot_size + samp_size,
+  data = all_df
+) %>%
+  residuals(.) %>%
+  test_mem(., lw, nmodel = 'Compact Rhizome ~ N')
+
+# Short Creeping Rhyzome
+sac_rcr <- lm(
+  r_cr ~
+    ann_prec +
+      plot_size +
+      samp_size,
+  data = all_df
+) %>%
+  residuals(.) %>%
+  test_mem(., lw, nmodel = 'Short-Creeping Rhizome ~ Annual Rainfall')
+
+# laminae dissection
+sac_lmseg <- lm(
+  lmseg ~ ann_prec + plot_size + samp_size,
+  data = all_df
+) %>%
+  residuals(.) %>%
+  test_mem(., lw, nmodel = 'Multipinnate ~ Annual Rainfall')
+
+# Buds
+sac_buds <- lm(
+  buds ~ ann_prec + plot_size + samp_size,
+  data = all_df
+) %>%
+  residuals(.) %>%
+  test_mem(., lw, nmodel = 'Buds ~ Annual Rainfall')
+
+# Indusia
+sac_ind <- lm(
+  ind ~ ann_prec + plot_size + samp_size,
+  data = all_df
+) %>%
+  residuals(.) %>%
+  test_mem(., lw, nmodel = 'Indusia ~ Annual Rainfall')
+
+# Laminae dimorphism
+sac_dim <- lm(
+  ldim ~ ann_prec + prec_seas + plot_size + samp_size,
+  data = all_df
+) %>%
+  residuals(.) %>%
+  test_mem(., lw, nmodel = 'Frond Dimorphism ~ AR + PS')
+
+# Spore chlorophyll
+sac_spore <- lm(
+  chl ~ prec_seas + ann_prec + plot_size + samp_size,
+  data = all_df
+) %>%
+  residuals(.) %>%
+  test_mem(
+    .,
+    lw,
+    nmodel = 'Spore Chlorophyll ~ Rainfall Seasonallity + Annual Rainfall + MEM5 + MEM1'
+  )
+```
+
+# Output data
+
+```{r}
+# Combine results from all models into a single data frame
+cor_df <-
+  rbind(
+    sac_diam,
+    sac_rcomp,
+    sac_rcr,
+    sac_lmseg,
+    sac_buds,
+    sac_ind,
+    sac_dim,
+    sac_spore$sac  # Note: spore includes selected MEMs
+  )
+cor_df  # Display Moran's I and p-values
+```
+
+# Saving data
+```{r}
+# Save table of Moran’s I statistics
+write.xlsx(cor_df, "outputs/Moran_TRAW.xlsx", rowNames = T)
+
+# Save updated CWM values and MEM-selected model for spore chlorophyll
+saveRDS(cwm_values, file = "data/cwm_values_raw.RDS")
+saveRDS(sac_spore, file = 'outputs/mem_chl_traw.RDS')
+```

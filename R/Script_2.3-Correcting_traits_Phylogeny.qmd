@@ -1,0 +1,409 @@
+---
+bibliography: /home/denilsonmachado/Bibliografia/library.bib
+lang: en-US
+---
+
+# 2.3. Removing phylogenetic signal 
+
+In this phase we are removing phylogenetic signal from traits, using PGLS for continuous traits and PVR + Binomial GLM to binary traits, based on the @Iserhard2019 procedure. The binary traits are corrected with PVR.bi_sig function developed by us, and is available in "func/" folder. This function is applied for each phylogenetic scenario. 
+
+This script require ~3 GiB of RAM Memory
+Always run in a clean r-session with an empty environment
+
+## Packages
+```{r}
+# .rs.restartR() ## Restart R session
+# devtools::install_github("cran/binomTools") # Install binomTools if not yet
+rm(list = ls()) ## Clear the R environment
+gc() ## Run garbage collection to free up memory
+
+source("func/PVR.bi_sig.R") # Load custom function for binary trait correction
+library(openxlsx) # For reading/writing Excel files
+library(rsq) # For R-squared calculations
+library(openxlsx) # Duplicate (safe to ignore)
+library(foreach) # For loop abstraction
+library(doParallel) # For parallel execution
+library(readxl) # For reading Excel files
+require(binomTools) # For binomial-related tools
+library(readxl) # Duplicate (safe to ignore)
+library(PVR) # For phylogenetic eigenvector regression
+library(ape) # For handling phylogenetic trees
+library(phytools) # For phylogenetic analyses
+library(dplyr) # For data manipulation
+library(nlme) # For PGLS models
+library(tidyverse) # Load several packages in the tidyverse
+
+set.seed(811) ## Set seed for reproducibility
+options(scipen = 999) ## Avoid scientific notation in outputs
+N = 100 # Number of trees/replicates to run
+```
+## Load data
+```{r}
+org_data <- readRDS("data/org_data.RDS") # Load dataset with traits and tree tips
+
+trees <- read.tree("data/new_ftrees.txt")[1:N] # Read 1000 phylogenetic trees
+
+org_data$traits <- filter(
+  org_data$traits,
+  rownames(org_data$traits) %in% trees[[1]]$tip.label
+) # Keep only trait data matching tree tips
+
+org_traits <- foreach(i = 1:N) %do%
+  {
+    org_data$traits[match(trees[[i]]$tip.label, rownames(org_data$traits)), ]
+  } # Align traits with each tree tip order
+```
+## Do parallel computing
+```{r}
+no_cores <- detectCores() - 4 # Use available cores minus 4 (leave some for system)
+registerDoParallel(cores = no_cores) # Register parallel backend
+cl <- makeCluster(no_cores, type = "FORK") # Create parallel cluster using FORK
+```
+## Rhizome Diameter
+```{r}
+fit.pgls <- foreach(i = 1:N) %dopar%
+  {
+    nlme::gls(
+      model = diam ~ 1,
+      data = org_traits[[i]],
+      correlation = corBrownian(phy = trees[[i]])
+    ) # Fit PGLS model (diameter as response, Brownian correlation)
+  }
+
+res.fit.pgls <- foreach(i = 1:N) %dopar%
+  {
+    data.frame(diam = residuals(fit.pgls[[i]], type = "normalized")) %>%
+      `rownames<-`(rownames(org_traits[[i]])) # Extract normalized residuals from PGLS
+  }
+
+S_riz_diam <- res.fit.pgls # Save residuals as phylogenetically corrected trait
+
+S_K_diam <- foreach(i = 1:N, .combine = c, .verbose = T) %dopar%
+  {
+    phylosig(
+      trees[[i]],
+      S_riz_diam[[i]]$diam,
+      method = "K",
+      nsim = 1000,
+      test = T
+    )$K # Calculate K-statistic (phylogenetic signal)
+  }
+
+S_K_diam_P <- foreach(i = 1:N, .combine = c, .verbose = T) %dopar%
+  {
+    phylosig(
+      trees[[i]],
+      S_riz_diam[[i]]$diam,
+      method = "K",
+      nsim = 1000,
+      test = T
+    )$P # Corresponding p-value for K
+  }
+
+S_comp_K <- cbind.data.frame(K = S_K_diam, pvalue = S_K_diam_P) # Combine K and p-values
+```
+### Saving data
+
+```{r}
+write.xlsx(
+  S_comp_K,
+  file = 'outputs/phylogenetic_info/sig_correction.xlsx',
+  startCol = 1,
+  startRow = 1
+) # Save results to Excel
+```
+## Compact Rhizome
+
+```{r}
+riz_comp <- foreach(i = 1:N) %dopar%
+  {
+    org_traits[[i]][, "r_comp"] %>%
+      `names<-`(rownames(org_traits[[i]])) # Extract "r_comp" trait for each tree
+  }
+
+riz_comp_correction <- foreach(i = 1:N) %dopar%
+  {
+    PVR.bi_sig(t = riz_comp[[i]], tree = trees[[i]]) # Correct for phylogenetic signal
+  }
+```
+## Short Creeping Short-Creeping
+
+```{r}
+riz_cr <- foreach(i = 1:N) %dopar%
+  {
+    org_traits[[i]][, "r_cr"] %>%
+      `names<-`(rownames(org_traits[[i]]))
+  }
+
+riz_cr_correction <- foreach(i = 1:N) %dopar%
+  {
+    PVR.bi_sig(t = riz_cr[[i]], tree = trees[[i]])
+  }
+```
+## Long-Creeping Rhizome
+
+```{r}
+riz_lr <- foreach(i = 1:N) %dopar%
+  {
+    org_traits[[i]][, "r_lr"] %>%
+      `names<-`(rownames(org_traits[[i]]))
+  }
+
+riz_lr_correction <- foreach(i = 1:N) %dopar%
+  {
+    PVR.bi_sig(t = riz_lr[[i]], tree = trees[[i]])
+  }
+```
+## Multipinnate Laminae
+
+```{r}
+lam_mseg <- foreach(i = 1:N) %dopar%
+  {
+    org_traits[[i]][, "lmseg"] %>%
+      `names<-`(rownames(org_traits[[i]]))
+  }
+
+lam_mseg_correction <- foreach(i = 1:N) %dopar%
+  {
+    PVR.bi_sig(t = lam_mseg[[i]], tree = trees[[i]])
+  }
+```
+## Proliferous buds
+
+```{r}
+buds <- foreach(i = 1:N) %dopar%
+  {
+    org_traits[[i]][, "buds"] %>%
+      `names<-`(rownames(org_traits[[i]]))
+  }
+
+buds_correction <- foreach(i = 1:N) %dopar%
+  {
+    PVR.bi_sig(t = buds[[i]], tree = trees[[i]])
+  }
+```
+## Laminae trichome
+
+```{r}
+ltri <- foreach(i = 1:N) %dopar%
+  {
+    org_traits[[i]][, "ltri"] %>%
+      `names<-`(rownames(org_traits[[i]]))
+  }
+
+ltri_correction <- foreach(i = 1:N) %dopar%
+  {
+    PVR.bi_sig(t = ltri[[i]], tree = trees[[i]])
+  }
+```
+## Indusium/pseudo-indusium 
+
+```{r}
+ind <- foreach(i = 1:N) %dopar%
+  {
+    org_traits[[i]][, "ind"] %>%
+      `names<-`(rownames(org_traits[[i]]))
+  }
+
+ind_correction <- foreach(i = 1:N) %dopar%
+  {
+    PVR.bi_sig(t = ind[[i]], tree = trees[[i]])
+  }
+```
+## Frond morphology
+
+```{r}
+lmorf <- foreach(i = 1:N) %dopar%
+  {
+    org_traits[[i]][, "ldim"] %>%
+      `names<-`(rownames(org_traits[[i]]))
+  }
+
+lmorf_correction <- foreach(i = 1:N) %dopar%
+  {
+    PVR.bi_sig(t = lmorf[[i]], tree = trees[[i]])
+  }
+```
+## Spore chlorophyll 
+
+```{r}
+chl <- foreach(i = 1:N) %dopar%
+  {
+    org_traits[[i]][, "chl"] %>%
+      `names<-`(rownames(org_traits[[i]]))
+  }
+
+chl_correction <- foreach(i = 1:N) %dopar%
+  {
+    PVR.bi_sig(t = chl[[i]], tree = trees[[i]])
+  }
+```
+##  Stop Parallel computing
+
+```{r}
+stopCluster(cl)
+```
+## Output Data 
+
+```{r}
+riz_comp_sig <- foreach(i = 1:N) %dopar%
+  {
+    riz_comp_correction[[i]]$phylo.sig.results # Extract the PVR Results
+  } %>%
+  map_dfr(.f = cbind, .id = 'trees') # Combine in a data.frame
+
+riz_cr_sig <- foreach(i = 1:N) %dopar%
+  {
+    riz_cr_correction[[i]]$phylo.sig.results
+  } %>%
+  map_dfr(.f = cbind, .id = 'trees')
+
+riz_lr_sig <- foreach(i = 1:N) %dopar%
+  {
+    riz_lr_correction[[i]]$phylo.sig.results
+  } %>%
+  map_dfr(.f = cbind, .id = 'trees')
+
+lam_mseg_sig <- foreach(i = 1:N) %dopar%
+  {
+    lam_mseg_correction[[i]]$phylo.sig.results
+  } %>%
+  map_dfr(.f = cbind, .id = 'trees')
+
+buds_sig <- foreach(i = 1:N) %dopar%
+  {
+    buds_correction[[i]]$phylo.sig.results
+  } %>%
+  map_dfr(.f = cbind, .id = 'trees')
+
+ltri_sig <- foreach(i = 1:N) %dopar%
+  {
+    ltri_correction[[i]]$phylo.sig.results
+  } %>%
+  map_dfr(.f = cbind, .id = 'trees')
+
+ind_sig <- foreach(i = 1:N) %dopar%
+  {
+    ind_correction[[i]]$phylo.sig.results
+  } %>%
+  map_dfr(.f = cbind, .id = 'trees')
+
+lmorf_sig <- foreach(i = 1:N) %dopar%
+  {
+    lmorf_correction[[i]]$phylo.sig.results
+  } %>%
+  map_dfr(.f = cbind, .id = 'trees')
+
+chl_sig <- foreach(i = 1:N) %dopar%
+  {
+    chl_correction[[i]]$phylo.sig.results
+  } %>%
+  map_dfr(.f = cbind, .id = 'trees')
+```
+
+### Save in a list the PVRs pseudo-R2 results 
+
+```{r}
+PVR <- vector(mode = "list") #empty list
+PVR[[1]] <- riz_comp_sig # add trait to the list
+PVR[[2]] <- riz_cr_sig
+PVR[[3]] <- riz_lr_sig
+PVR[[4]] <- lam_mseg_sig
+PVR[[5]] <- buds_sig
+PVR[[6]] <- ltri_sig
+PVR[[7]] <- ind_sig
+PVR[[8]] <- lmorf_sig
+PVR[[9]] <- chl_sig
+
+#vector of traits names
+names <- c(
+  "riz_comp",
+  "riz_cr",
+  "riz_lr",
+  "lam_mseg",
+  "buds",
+  "ltri",
+  "ind",
+  "lmorf",
+  'chl'
+)
+
+# Summarize the results of PVR (mean and range)
+PVR_table <- foreach(i = 1:N, j = seq_along(names)) %dopar%
+  {
+    TABLE_MEAN(PVR[[i]], names[i])
+  } %>%
+  list_cbind(name_repair = "unique")
+```
+### Save PVR data 
+
+```{r}
+write.xlsx(
+  x = t(PVR_table),
+  file = "outputs/phylogenetic_info/pvr_results.xlsx",
+  startRow = 1,
+  startCol = 1,
+  keepNA = T,
+  rowNames = T
+) # 
+```
+### Saving corrected trait
+
+```{r}
+ # extract the corrected trait and add to a empty list
+Scomp <- vector(mode = "list") # empty list
+Scomp[[1]] <- foreach(i = 1:N) %do%
+  {
+    riz_comp_correction[[i]]$corrected_trait
+  }
+Scomp[[2]] <- foreach(i = 1:N) %do%
+  {
+    riz_cr_correction[[i]]$corrected_trait
+  }
+Scomp[[3]] <- foreach(i = 1:N) %do%
+  {
+    riz_lr_correction[[i]]$corrected_trait
+  }
+Scomp[[4]] <- foreach(i = 1:N) %do%
+  {
+    lam_mseg_correction[[i]]$corrected_trait
+  }
+Scomp[[5]] <- foreach(i = 1:N) %do%
+  {
+    buds_correction[[i]]$corrected_trait
+  }
+Scomp[[6]] <- foreach(i = 1:N) %do%
+  {
+    ltri_correction[[i]]$corrected_trait
+  }
+Scomp[[7]] <- foreach(i = 1:N) %do%
+  {
+    ind_correction[[i]]$corrected_trait
+  }
+Scomp[[8]] <- foreach(i = 1:N) %do%
+  {
+    lmorf_correction[[i]]$corrected_trait
+  }
+Scomp[[9]] <- foreach(i = 1:N) %do%
+  {
+    chl_correction[[i]]$corrected_trait
+  }
+Scomp[[10]] <- S_riz_diam
+
+names(Scomp) <- c(
+  "riz_comp",
+  "riz_cr",
+  "riz_lr",
+  "lam_mseg",
+  "buds",
+  "ltri",
+  "ind",
+  "lmorf",
+  "chl",
+  "riz_diam"
+)
+
+length(Scomp[[2]])
+saveRDS(Scomp, file = "outputs/RDS/SCOMP.RDS") # S Comp from traits
+saveRDS(PVR, file = "outputs/RDS/PVR.RDS") # PVR Results
+```

@@ -1,0 +1,1155 @@
+---
+lang: en-US
+bibliography: /home/denilsonmachado/Bibliografia/library.bib
+---
+
+# 2.4 On Model Selection w/ Corrected Traits 
+## Packages
+
+```{r}
+rm(list = ls()) ## Empty environment
+gc()
+
+require(vegan)          # Ecological analysis
+library(readxl)         # Read Excel files
+library(reshape2)       # Data reshaping
+library(SYNCSA)         # SYNCSA for trait-environment modeling
+library(openxlsx)       # Exporting Excel
+library(tidyverse)      # Data manipulation and visualization
+library(foreach)        # Parallel processing (loop)
+library(doParallel)     # Parallel backend
+library(bbmle)          # AICc model selection
+source("func/summarize_trees.R")  # Custom summarizing function 
+
+
+# This function summarizes model selection results across N scenarios.
+get_result <- function(sel_md) {
+  # For each scenario, extract the best model (delta AICc = 0)
+  result_1 <- foreach(i = 1:N) %do%
+    {
+      cbind.data.frame(
+        models = rownames(sel_md[[i]]),
+        sel_md[[i]],
+        row.names = NULL
+      ) %>%
+        filter(dAICc == 0)
+    } %>%
+    plyr::ldply(.fun = data.frame)
+
+  # Summarize the performance of each model across scenarios
+  summary <- cbind.data.frame(
+    n_sel = tapply(result_1$dAICc, result_1$models, length),          # Times selected as best
+    AICc_mean = tapply(result_1$AICc, result_1$models, mean),         # Mean AICc
+    AICc_min = round(tapply(result_1$AICc, result_1$models, min), 2), # Min AICc
+    AICc_max = round(tapply(result_1$AICc, result_1$models, max), 2), # Max AICc
+    dAICc_mean = tapply(result_1$dAICc, result_1$models, mean),       # Mean delta AICc
+    dAICc_min = round(tapply(result_1$dAICc, result_1$models, min), 2), # Min delta AICc
+    dAICc_max = round(tapply(result_1$dAICc, result_1$models, min), 2), # Max delta AICc
+    df = tapply(result_1$df, result_1$models, mean)                   # Degrees of freedom
+  )
+  return(summary)
+}
+
+set.seed(811)          # Ensure reproducibility
+options(scipen = 999)  # Disable scientific notation
+N = 1000               # Number of iterations (e.g., phylogenetic trees)
+```
+## Trait Matrix
+
+```{r}
+#Load data base
+S_comp <- readRDS("outputs/RDS/SCOMP.RDS")
+org_data <- readRDS("data/org_data.RDS")
+```
+## Do Parallel Computing
+
+```{r}
+no_cores <- detectCores() - 4     # Reserve some CPU cores for system (adjust as needed)
+registerDoParallel(cores = no_cores)
+cl <- makeCluster(no_cores, type = "FORK")  # Linux/Mac only
+```
+## Fitting models with traits CWM
+### Rhizome diameter
+
+```{r}
+# Loop over all N iterations (e.g., permutations or bootstrap samples), organizing data for analysis
+or_s_diam <- foreach(i = 1:N) %dopar% {
+  organize.syncsa(
+    org_data$community,                  # community matrix
+    envir = org_data$environmental,      # environmental variables
+    traits = data.frame(diam = S_comp$riz_diam[[i]]) # trait: rhizome diameter
+  )
+}
+
+# Compute community-weighted means (CWM) for rhizome diameter in each dataset
+cwm_S_r_diam <- foreach(i = 1:N) %dopar% {
+  (matrix.t(
+    or_s_diam[[i]]$community,            # community matrix
+    or_s_diam[[i]]$traits,               # trait matrix (rhizome diameter)
+    scale = F                            # do not scale
+  )$matrix.T)                            # extract T matrix (CWM result)
+}
+
+# Define candidate linear models (as formulas) to explain rhizome diameter using different predictors
+models <- c(
+  "Rhiz. Diam ~ MT + plot_size + samp_size",
+  "Rhiz. Diam ~ MT + AP + plot_size + samp_size",
+  "Rhiz. Diam ~ AP * PS + plot_size + samp_size",
+  "Rhiz. Diam ~ N + plot_size + samp_size",
+  "DIAM ~ CEC + plot_size + samp_size",
+  "Rhiz. Diam ~ N + CEC + plot_size + samp_size",
+  "Rhiz. Diam ~ 1" # original model
+)
+
+
+# Fit all candidate models using parallel processing
+md1 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_diam[[i]] ~ max_temp_wam + plot_size + samp_size,
+    data = or_s_diam[[i]]$environmental
+  )
+
+md2 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_diam[[i]] ~
+      max_temp_wam +
+        ann_prec +
+        plot_size +
+        samp_size,
+    data = or_s_diam[[i]]$environmental
+  )
+
+md3 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_diam[[i]] ~
+      ann_prec *
+        prec_seas +
+        plot_size +
+        samp_size,
+    data = or_s_diam[[i]]$environmental
+  )
+
+md4 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_diam[[i]] ~ nitrogen + plot_size + samp_size,
+    data = or_s_diam[[i]]$environmental
+  )
+
+md5 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_diam[[i]] ~ cec + plot_size + samp_size,
+    data = or_s_diam[[i]]$environmental
+  )
+
+md6 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_diam[[i]] ~
+      nitrogen +
+        cec +
+        plot_size +
+        samp_size,
+    data = or_s_diam[[i]]$environmental
+  )
+
+md7 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_diam[[i]] ~ 1 + plot_size + samp_size,
+    data = or_s_diam[[i]]$environmental
+  )
+
+# Select best model per iteration using AICc comparison
+sel_diam <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      md6[[i]],
+      md7[[i]],
+      base = T,
+      delta = T,
+      mnames = models[1:7]
+    ) %>%
+      `class<-`("data.frame")  # Ensure output is a data.frame
+  } %>%
+  get_result() # Aggregate results from parallel loop
+
+# View AICc model selection results
+sel_diam
+
+# Save the best model for rhizome diameter
+model_diam <- md4
+
+```
+### Rhizome compact 
+
+```{r}
+org_rcomp <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      envir = org_data$environmental,
+      traits = data.frame(riz_comp = S_comp$riz_comp[[i]])
+    )
+  }
+
+cwm_S_r_comp <- foreach(i = 1:N) %dopar%
+  {
+    (matrix.t(
+      org_rcomp[[i]]$community,
+      org_rcomp[[i]]$traits,
+      scale = F
+    )$matrix.T)
+  }
+
+models <-
+  c(
+    "Rhiz. Compact ~ AP + plot_size + samp_size",
+    "Rhiz. Compact ~ PS + plot_size + samp_size",
+    "Rhiz. Compact ~ AP + PS + plot_size + samp_size",
+    "Rhiz. Compact ~  AP*PS + plot_size + samp_size",
+    "Rhiz. Compact ~ N + plot_size + samp_size",
+    "Rhiz. Compact ~ CEC + plot_size + samp_size",
+    "Rhiz. Compact ~ N + CEC + plot_size + samp_size",
+    "Rhiz. Compact  ~ 1 + plot_size + samp_size" # original model
+  )
+
+
+md1 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_comp[[i]] ~ ann_prec + plot_size + samp_size,
+    data = org_rcomp[[i]]$environmental
+  )
+
+md2 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_comp[[i]] ~ prec_seas + plot_size + samp_size,
+    data = org_rcomp[[i]]$environmental
+  )
+
+md3 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_comp[[i]] ~
+      ann_prec +
+        prec_seas +
+        plot_size +
+        samp_size,
+    data = org_rcomp[[i]]$environmental
+  )
+
+md4 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_comp[[i]] ~
+      ann_prec *
+        prec_seas +
+        plot_size +
+        samp_size,
+    data = org_rcomp[[i]]$environmental
+  )
+
+md5 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_comp[[i]] ~ nitrogen + plot_size + samp_size,
+    data = org_rcomp[[i]]$environmental
+  )
+
+md6 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_comp[[i]] ~ cec + plot_size + samp_size,
+    data = org_rcomp[[i]]$environmental
+  )
+
+md7 <-
+  foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_comp[[i]] ~
+      nitrogen +
+        cec +
+        plot_size +
+        samp_size,
+    data = org_rcomp[[i]]$environmental
+  )
+
+md8 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_comp[[i]] ~ 1 + plot_size + samp_size,
+    data = org_rcomp[[i]]$environmental
+  )
+
+
+sel_rcomp <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      md6[[i]],
+      md7[[i]],
+      md8[[i]],
+      base = T,
+      delta = T,
+      mnames = models[1:8]
+    ) %>%
+      `class<-`("data.frame")
+  } %>%
+  get_result()
+sel_rcomp
+model_comp <- md6
+```
+### Rhizome short creeping 
+
+```{r}
+org_rcr <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      envir = org_data$environmental,
+      traits = data.frame(riz_cr = S_comp$riz_cr[[i]])
+    )
+  }
+
+cwm_S_r_cr <- foreach(i = 1:N) %dopar%
+  {
+    (matrix.t(org_rcr[[i]]$community, org_rcr[[i]]$traits, scale = F)$matrix.T)
+  } #não normal
+
+models <-
+  c(
+    "Rhiz. Short ~ AP + plot_size + samp_size",
+    "Rhiz. Short ~ PS + plot_size + samp_size",
+    "Rhiz. Short ~ AP + PS + plot_size + samp_size",
+    "Rhiz. Short ~  AP*PS + plot_size + samp_size",
+    "Rhiz. Short ~ N + plot_size + samp_size",
+    "Rhiz. Short ~ CEC + plot_size + samp_size",
+    "Rhiz. Short ~ N + CEC + plot_size + samp_size",
+    "Rhiz. Short  ~ 1 + plot_size + samp_size" # original model
+  )
+
+md1 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_cr[[i]] ~ ann_prec + plot_size + samp_size,
+    data = org_rcr[[i]]$environmental
+  )
+md2 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_cr[[i]] ~ prec_seas + plot_size + samp_size,
+    data = org_rcr[[i]]$environmental
+  )
+md3 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_cr[[i]] ~ ann_prec + prec_seas + plot_size + samp_size,
+    data = org_rcr[[i]]$environmental
+  )
+md4 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_cr[[i]] ~ ann_prec * prec_seas + plot_size + samp_size,
+    data = org_rcr[[i]]$environmental
+  )
+md5 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_cr[[i]] ~ nitrogen + plot_size + samp_size,
+    data = org_rcr[[i]]$environmental
+  )
+md6 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_cr[[i]] ~ cec + plot_size + samp_size,
+    data = org_rcr[[i]]$environmental
+  )
+md7 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_cr[[i]] ~ nitrogen + cec + plot_size + samp_size,
+    data = org_rcr[[i]]$environmental
+  )
+md8 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_cr[[i]] ~ 1 + plot_size + samp_size,
+    data = org_rcr[[i]]$environmental
+  )
+
+sel_rcr <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      md6[[i]],
+      md7[[i]],
+      md8[[i]],
+      base = T,
+      delta = T,
+      mnames = models[1:8]
+    ) %>%
+      `class<-`("data.frame")
+  } %>%
+  get_result()
+sel_rcr
+model_rcr <- md3
+
+```
+### Rhizome long creeping 
+
+```{r}
+org_lr <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      envir = org_data$environmental,
+      traits = data.frame(riz_lr = S_comp$riz_lr[[i]])
+    )
+  }
+
+cwm_S_r_lr <-
+  foreach(i = 1:N) %dopar%
+  (matrix.t(org_lr[[i]]$community, org_lr[[i]]$traits, scale = F)$matrix.T)
+
+models <-
+  c(
+    "Rhiz. Long ~ AP + plot_size + samp_size",
+    "Rhiz. Long ~ PS + plot_size + samp_size",
+    "Rhiz. Long ~ AP + PS + plot_size + samp_size",
+    "Rhiz. Long ~  AP*PS + plot_size + samp_size",
+    "Rhiz. Long ~ N + plot_size + samp_size",
+    "Rhiz. Long ~ CEC + plot_size + samp_size",
+    "Rhiz. Long ~ N + CEC + plot_size + samp_size",
+    "Rhiz. Long  ~ 1 + plot_size + samp_size" # original model
+  )
+
+md1 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_lr[[i]] ~ ann_prec + plot_size + samp_size,
+    data = org_lr[[i]]$environmental
+  )
+md2 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_lr[[i]] ~ prec_seas + plot_size + samp_size,
+    data = org_lr[[i]]$environmental
+  )
+md3 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_lr[[i]] ~ ann_prec + prec_seas + plot_size + samp_size,
+    data = org_lr[[i]]$environmental
+  )
+md4 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_lr[[i]] ~ ann_prec * prec_seas + plot_size + samp_size,
+    data = org_lr[[i]]$environmental
+  )
+md5 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_lr[[i]] ~ nitrogen + plot_size + samp_size,
+    data = org_lr[[i]]$environmental
+  )
+md6 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_lr[[i]] ~ cec + plot_size + samp_size,
+    data = org_lr[[i]]$environmental
+  )
+md7 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_lr[[i]] ~ nitrogen + cec + plot_size + samp_size,
+    data = org_lr[[i]]$environmental
+  )
+md8 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_lr[[i]] ~ 1 + plot_size + samp_size,
+    data = org_lr[[i]]$environmental
+  )
+
+
+sel_rlr <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      md6[[i]],
+      md7[[i]],
+      md8[[i]],
+      base = T,
+      delta = T,
+      mnames = models
+    ) %>%
+      `class<-`("data.frame")
+  } %>%
+  get_result()
+
+sel_rlr
+
+model_lr <- md8 # Null
+```
+
+### Laminae Multipinnate
+
+```{r}
+org_lam_mseg <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      envir = org_data$environmental,
+      traits = data.frame(lam_mseg = S_comp$lam_mseg[[i]])
+    )
+  }
+
+cwm_S_lam_mseg <-
+  foreach(i = 1:N) %dopar%
+  (matrix.t(
+    org_lam_mseg[[i]]$community,
+    org_lam_mseg[[i]]$traits,
+    scale = F
+  )$matrix.T)
+
+models <- c(
+  "Multipinnate ~ MT + plot_size + samp_size",
+  "Multipinnate ~ AP + plot_size + samp_size",
+  "Multipinnate ~ PS + plot_size + samp_size",
+  "Multipinnate ~ MT + AP + plot_size + samp_size",
+  "Multipinnate ~ MT + PS + plot_size + samp_size",
+  "Multipinnate ~ AP * PS + plot_size + samp_size",
+  "Multipinnate ~ MT * AP + plot_size + samp_size",
+  "Multipinnate ~ MT * PS + plot_size + samp_size",
+  "Multipinnate ~ 1 + plot_size + samp_size"
+)
+
+md1 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ max_temp_wam + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md2 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ ann_prec + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md3 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ prec_seas + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md4 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ max_temp_wam + ann_prec + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md5 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ max_temp_wam + prec_seas + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md6 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ ann_prec * prec_seas + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md7 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ max_temp_wam * ann_prec + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md8 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ max_temp_wam * prec_seas + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md9 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ 1 + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+
+sel_lmseg <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      md6[[i]],
+      md7[[i]],
+      md8[[i]],
+      md9[[i]],
+      base = T,
+      delta = T,
+      mnames = models
+    ) %>%
+      `class<-`("data.frame")
+  } %>%
+  get_result()
+
+sel_lmseg
+
+model_mseg <- md2
+```
+### proliferous Buds 
+
+```{r}
+org_buds <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      envir = org_data$environmental,
+      traits = data.frame(buds = S_comp$buds[[i]])
+    )
+  }
+
+cwm_S_buds <-
+  foreach(i = 1:N) %dopar%
+  (matrix.t(org_buds[[i]]$community, org_buds[[i]]$traits, scale = F)$matrix.T)
+
+
+models <-
+  c(
+    "Buds ~ MT + plot_size + samp_size",
+    "Buds ~ PS + plot_size + samp_size",
+    "Buds ~ AP + plot_size + samp_size",
+    "Buds ~ MT + AP + plot_size + samp_size",
+    "Buds ~ AP * PS + plot_size + samp_size",
+    "Buds ~ MT * PS + plot_size + samp_size",
+    "Buds ~ MT * AP + plot_size + samp_size",
+    "Buds  ~ 1 + plot_size + samp_size"
+  )
+
+md1 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ max_temp_wam + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md2 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ prec_seas + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md3 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ ann_prec + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md4 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ max_temp_wam + ann_prec + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md5 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ ann_prec * prec_seas + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md6 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ max_temp_wam * prec_seas + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md7 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ max_temp_wam * ann_prec + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md8 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ 1 + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+
+
+sel_buds <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      md6[[i]],
+      md7[[i]],
+      md8[[i]],
+      base = T,
+      delta = T,
+      mnames = models[1:8]
+    ) %>%
+      `class<-`("data.frame")
+  } %>%
+  get_result()
+
+sel_buds
+
+model_buds <- md3
+```
+### Trichomes in laminae 
+
+```{r}
+org_ltri <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      envir = org_data$environmental,
+      traits = data.frame(ltri = S_comp$ltri[[i]])
+    )
+  }
+
+cwm_S_ltri <-
+  foreach(i = 1:N) %dopar%
+  (matrix.t(org_ltri[[i]]$community, org_ltri[[i]]$traits, scale = F)$matrix.T)
+
+
+models <- c(
+  "Pub. Laminae ~ MT + plot_size + samp_size",
+  "Pub. Laminae ~ AP + plot_size + samp_size",
+  "Pub. Laminae ~ MT + AP + plot_size + samp_size",
+  "Pub. Laminae ~ AP * PS + plot_size + samp_size",
+  "Pub. Laminae ~ MT * PS + plot_size + samp_size",
+  "Pub. Laminae ~ MT * AP + plot_size + samp_size",
+  "Pub. Laminae ~ 1 + plot_size + samp_size"
+)
+
+md1 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ltri[[i]] ~ max_temp_wam + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+md2 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ltri[[i]] ~ ann_prec + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+md3 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ltri[[i]] ~ max_temp_wam + ann_prec + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+md4 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ltri[[i]] ~ ann_prec * prec_seas + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+md5 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ltri[[i]] ~ max_temp_wam * prec_seas + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+md6 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ltri[[i]] ~ max_temp_wam * ann_prec + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+md7 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ltri[[i]] ~ 1 + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+
+sel_ltri <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      md6[[i]],
+      md7[[i]],
+      base = T,
+      delta = T,
+      mnames = models[1:7]
+    ) %>%
+      `class<-`("data.frame")
+  } %>%
+  get_result()
+
+sel_ltri
+
+model_ltri <- md7 #Null
+
+```
+### Indusium presence
+
+```{r}
+# indusium
+org_ind <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      envir = org_data$environmental,
+      traits = data.frame(ind = S_comp$ind[[i]])
+    )
+  }
+
+
+cwm_S_ind <-
+  foreach(i = 1:N) %dopar%
+  (matrix.t(org_ind[[i]]$community, org_ind[[i]]$traits, scale = F)$matrix.T)
+
+
+models <- c(
+  "Indusium ~ AP + plot_size + samp_size",
+  "Indusium ~ PS + plot_size + samp_size",
+  "Indusium ~ PS + AP + plot_size + samp_size",
+  "Indusium ~ PS * AP + plot_size + samp_size",
+  "Indusium  ~ 1 + plot_size + samp_size"
+)
+
+md1 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ind[[i]] ~ ann_prec + plot_size + samp_size,
+    data = org_ind[[i]]$environmental
+  )
+md2 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ind[[i]] ~ prec_seas + plot_size + samp_size,
+    data = org_ind[[i]]$environmental
+  )
+md3 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ind[[i]] ~ prec_seas + ann_prec + plot_size + samp_size,
+    data = org_ind[[i]]$environmental
+  )
+md4 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ind[[i]] ~ prec_seas * ann_prec + plot_size + samp_size,
+    data = org_ind[[i]]$environmental
+  )
+md5 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ind[[i]] ~ 1 + plot_size + samp_size,
+    data = org_ind[[i]]$environmental
+  )
+
+sel_ind <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      base = T,
+      delta = T,
+      mnames = models
+    ) %>%
+      `class<-`("data.frame")
+  } %>%
+  get_result()
+
+sel_ind
+
+model_ind <- md5
+```
+### Laminae morphology 
+
+```{r}
+org_lmorf <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      envir = org_data$environmental,
+      traits = data.frame(lmorf = S_comp$lmorf[[i]])
+    )
+  }
+
+cwm_S_lmorf <-
+  foreach(i = 1:N) %dopar%
+  (matrix.t(
+    org_lmorf[[i]]$community,
+    org_lmorf[[i]]$traits,
+    scale = F
+  )$matrix.T)
+
+models <-
+  c(
+    "Dimorphism ~ AP + plot_size + samp_size",
+    "Dimorphism ~ PS + plot_size + samp_size",
+    "Dimorphism ~ AP + PS + plot_size + samp_size",
+    "Dimorphism ~ PS * AP + plot_size + samp_size",
+    "Dimorphism  ~ 1 + plot_size + samp_size"
+  )
+
+md1 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lmorf[[i]] ~ ann_prec + plot_size + samp_size,
+    data = org_lmorf[[i]]$environmental
+  )
+md2 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lmorf[[i]] ~ prec_seas + plot_size + samp_size,
+    data = org_lmorf[[i]]$environmental
+  )
+md3 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lmorf[[i]] ~ ann_prec + prec_seas + plot_size + samp_size,
+    data = org_lmorf[[i]]$environmental
+  )
+md4 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lmorf[[i]] ~ prec_seas * ann_prec + plot_size + samp_size,
+    data = org_lmorf[[i]]$environmental
+  )
+md5 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lmorf[[i]] ~ 1 + plot_size + samp_size,
+    data = org_lmorf[[i]]$environmental
+  )
+
+sel_lmorf <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      base = T,
+      delta = T,
+      mnames = models[1:5]
+    ) %>%
+      `class<-`("data.frame")
+  } %>%
+  get_result()
+
+sel_lmorf
+
+model_dim <- md1
+```
+### Spore Chlorophyll
+
+```{r}
+org_chl <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      envir = org_data$environmental,
+      traits = data.frame(chl = S_comp$chl[[i]])
+    )
+  }
+
+
+cwm_S_chl <-
+  foreach(i = 1:N) %dopar%
+  (matrix.t(
+    org_chl[[i]]$community,
+    org_chl[[i]]$traits,
+    scale = F
+  )$matrix.T)
+models <-
+  c(
+    "Chlorophyll ~ AP + plot_size + samp_size",
+    "Chlorophyll ~ PS + plot_size + samp_size",
+    "Chlorophyll ~ MT + plot_size + samp_size",
+    "Chlorophyll ~ AP + PS + plot_size + samp_size",
+    "Chlorophyll ~ PS * AP + plot_size + samp_size",
+    "Chlorophyll ~ MT + AP + plot_size + samp_size",
+    "Chlorophyll ~ MT + PS + plot_size + samp_size",
+    "Chlorophyll ~ C + plot_size + samp_size",
+    "Chlorophyll  ~ 1 + plot_size + samp_size"
+  )
+
+
+md1 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ ann_prec + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md2 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ prec_seas + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md3 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ max_temp_wam + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md4 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ ann_prec + prec_seas + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md5 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ prec_seas * ann_prec + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md6 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ max_temp_wam + ann_prec + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md7 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ max_temp_wam + prec_seas + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md8 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ clay + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md9 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ 1 + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+
+
+sel_chl <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      md1[[i]],
+      md2[[i]],
+      md3[[i]],
+      md4[[i]],
+      md5[[i]],
+      md6[[i]],
+      md7[[i]],
+      md8[[i]],
+      md9[[i]],
+      base = T,
+      delta = T,
+      mnames = models
+    ) %>%
+      `class<-`("data.frame")
+  } %>%
+  get_result()
+
+sel_chl
+
+model_spore <- md2
+```
+## Stop parallel computing
+
+```{r}
+stopCluster(cl)
+```
+## Output
+
+```{r}
+## Elaborate a list of models
+a <- list(model_diam,
+  model_comp, #compact rhizome
+  model_rcr, #short-creeping rhizomme
+  model_lr, #long-creeping rhizomme
+  model_mseg, #laminae multipinnate
+  model_buds, # proliferous buds
+  model_ltri, #trichome in laminae
+  model_ind, #indusium and pseudo indusium presence
+  model_dim, #laminae dimorphic
+  model_spore #spore Chlorophyll
+)
+
+# Extract the coefficients from each model see "func/" folder for details of get_model function
+model_results <- lapply(a, function (x) map_dfr(x, get_model))
+
+head(model_results[[2]])
+
+# Summarize the model coefficients
+mod_df <- map_dfr(model_results, function (result){
+  result %>%
+  group_by(model) %>%
+  summarise(
+    across(
+      .cols = everything(),
+      .fns = function(x) {
+        paste0(round(mean(x, na.rm = T),6),"[±", round(sd(x, na.rm=T),6), "]")
+      }
+      )
+  ) %>%
+  ungroup() %>%
+  mutate(nsel= tapply(result$model, result$model, length), .before = 2)
+})
+
+view(mod_df)
+
+#Save data
+write.xlsx (x = mod_df, file = "outputs/Corrected/summ_models_tcor.xlsx", rowNames = T)
+
+
+## Output resumed data
+forw <- rbind(
+  sel_diam, #rhizome diameter
+  sel_rcomp, #compact rhizome
+  sel_rcr, #short-creeping rhizomme
+  sel_rlr, #long-creeping rhizomme
+  sel_lmseg, #laminae multipinnate
+  sel_buds, # proliferous buds
+  sel_ltri, #trichome in laminae
+  sel_ind, #indusium and pseudo indusium presence
+  sel_lmorf, #laminae dimorphic
+  sel_chl #spore Chlorophyll
+) %>%
+  mutate(models = rownames(.), .before = n_sel) %>%
+  remove_rownames()
+
+## Separete the models without predictors (bad_mods), from the model with at least one
+## environmental predictor
+rows <- grep("1", forw$models)
+nice_mods_Scomp <- forw[-rows, ] # Models w/ env predictors
+bad_mods_Scomp <- forw[rows, ] # Models without env. predictor (null models)
+
+## output CWM List
+cwm_list <- list()
+cwm_list[[1]] <- cwm_S_r_diam
+cwm_list[[2]] <- cwm_S_r_comp
+cwm_list[[3]] <- cwm_S_r_cr
+cwm_list[[4]] <- cwm_S_r_lr
+cwm_list[[5]] <- cwm_S_buds
+cwm_list[[6]] <- cwm_S_lam_mseg
+cwm_list[[7]] <- cwm_S_ltri
+cwm_list[[8]] <- cwm_S_chl
+cwm_list[[9]] <- cwm_S_lmorf
+cwm_list[[10]] <- cwm_S_ind
+names(cwm_list) <- c(
+  "diam",
+  "r_comp",
+  "r_cr",
+  "r_lr",
+  "buds",
+  "l_mseg",
+  "ltri",
+  "chl",
+  "lmorf",
+  "ind"
+)
+```
+## Saving data
+
+```{r}
+## Save CWM list
+saveRDS(cwm_list, "data/cwm_list.RDS")
+
+## Save resumed data
+wb_md_S <- list(
+  nice_mode_S = nice_mods_Scomp,
+  bad_mods_S = bad_mods_Scomp,
+  all_mods_S = forw
+)
+
+write.xlsx(wb_md_S, file = "outputs/Corrected/mod_select_cwm.xlsx",rowNames = T, overwrite = TRUE)
+```

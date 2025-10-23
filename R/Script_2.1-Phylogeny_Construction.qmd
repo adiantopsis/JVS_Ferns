@@ -1,0 +1,173 @@
+---
+bibliography: /home/denilsonmachado/Bibliografia/library.bib
+lang: us
+---
+# 2.1. Creating Phylogenetic Scenarios 
+In this phase we will elaborate a phylogenetic tree based on ftolr package megatree [@Nitta]. We also integrate species missing from the megatree.
+
+## Packages
+```{r}
+# devtools::install_github("fernphy/ftolr", force=T) # Install if needed
+library(ftolr)         # Main package for fern phylogeny
+library(geiger)        # Phylogenetic analysis tools (not directly used here)
+library(phytools)      # Tools for manipulating phylogenetic trees
+library(ape)           # Base package for phylogenetics in R
+library(openxlsx)      # Reading/writing Excel files
+library(readxl)        # Reading Excel files
+library(reshape2)      # Reshaping data (used for dcast)
+library(caper)         # Comparative analysis (not directly used here)
+library(tidyverse)     # Data manipulation and piping (%>%)
+
+rm(list = ls())        # Clear the environment
+set.seed(811)          # Set seed for reproducibility
+options(scipen = 99999) # Avoid scientific notation in outputs
+N = 1000               # Number of trees to be generated
+```
+
+## Load data
+
+```{r}
+# Reading site-by-species matrix from Excel
+d <- read_xlsx("data/data_ferns.xlsx", sheet = "w_matrix")
+
+# Transforming into a site x taxa abundance matrix
+comm <- reshape2::dcast(
+  data = d,
+  formula = site ~ taxa,
+  value.var = "FA_New",
+  fill = 0,
+  fun.aggregate = sum
+)
+
+dim(comm)              # Dimensions of the community matrix
+comm[1:5, 1:5]         # Preview first few rows and columns
+```
+
+## Loading Megatree
+Comparison of phylo tree and my community, we:
+1) Create a species vector;
+2) Compare w_matrix with tree tips;
+
+We will change the names of Dennstaedtia to Mucura since the tree was not been updated to include the genus. 
+
+17 species in data but not tree.
+
+```{r}
+# Load the ultrametric tree, rooted, and dropping outgroups
+phylo_new <- ftolr::ft_tree(branch_len = "ultra", rooted = TRUE, drop_og = TRUE)
+is.ultrametric(phylo_new) # Check if the tree is ultrametric
+
+# Create species vector from community matrix column names
+sp <- colnames(comm)
+sp <- sp[-1]                # Remove the "site" column
+sp <- as.matrix(sp)         # Convert to matrix format
+
+# Replace outdated names (Dennstaedtia -> Mucura)
+phylo_new$tip.label[grepl("Dennstaedtia_globulifera", phylo_new$tip.label)] <- 'Mucura_globulifera'
+phylo_new$tip.label[grepl("Dennstaedtia_bipinnata", phylo_new$tip.label)]   <- 'Mucura_bipinnata'
+
+# Compare species in data with those in the tree
+comparison <- name.check(phylo_new, sp, data.names = sp)
+length(comparison$data_not_tree) # Number of species not found in the tree
+
+# Extract species absent from the tree
+data_not_tree <- comparison$data_not_tree
+data_not_tree
+length(data_not_tree)
+```
+### Saving data 
+
+```{r}
+# Export the list of unmatched species to Excel for documentation
+write.xlsx(
+  x = data_not_tree,
+  file = "outputs/included_spp.xlsx",
+  keepNA = TRUE,
+  rowNames = TRUE
+)
+
+```
+
+# Finding species on tip labels
+
+```{r}
+# Check if specific genera are present in the tree
+phylo_new$tip.label[grepl("Diplazium_h", phylo_new$tip.label)]
+phylo_new$tip.label[grepl("Goniopteris_p", phylo_new$tip.label)]
+phylo_new$tip.label[grepl("Goniopteris_r", phylo_new$tip.label)]
+phylo_new$tip.label[grepl("Parablechnum_c", phylo_new$tip.label)]
+phylo_new$tip.label[grepl("Pityrogramma", phylo_new$tip.label)]
+phylo_new$tip.label[grepl("Trichomanes_c", phylo_new$tip.label)]
+phylo_new$tip.label[grepl("Asplenium_i", phylo_new$tip.label)]
+phylo_new$tip.label[grepl("Megalastrum", phylo_new$tip.label)]
+phylo_new$tip.label[grepl("Mucura", phylo_new$tip.label)]
+```
+
+
+# Creating 1000 phylo tree 
+Here we use Nitta et al (2022) megatree and add species from my community absents in the their tree.
+
+```{r}
+# Initialize a list of N copies of the base tree
+my.trees <- lapply(1:N, function(x) phylo_new) #insert megatree in a list with 1000 objects
+class(my.trees) <- "multiPhylo"   # Set class for multiple phylogenies
+
+# Inspect a few trees
+my.trees[[1]]
+my.trees[[2]]
+is.ultrametric(my.trees[[1]])
+
+# Get list of missing species to add
+miss_spp <- comparison$data_not_tree
+miss_spp2 <- miss_spp
+
+# Loop to add missing species to each tree
+for (j in seq_along(my.trees)) {
+  phylotree3 <- phylo_new
+  for (i in seq_along(miss_spp2)) {
+    nodeages <- branching.times(phylotree3)                  # Get node ages
+    phylotree3 <- compute.brtime(phylotree3, method = nodeages) # Compute branch lengths
+    phylotree3 <- add.species.to.genus(
+      phylotree3,
+      miss_spp2[i],
+      where = "random"                                       # Randomly place species within genus
+    )
+  }
+  my.trees[[j]] <- phylotree3                               # Save modified tree
+}
+
+# Confirm some trees are ultrametric
+is.ultrametric(my.trees[[1]])
+is.ultrametric(my.trees[[8]])
+
+# Plot example tree
+plotTree(my.trees[[1]])
+
+# Inspect Specific Trees (Optional)
+my.trees[[1]]
+my.trees[[2]]
+my.trees[[100]]
+```
+
+#1000 phylogenetic trees with just my species
+
+```{r}
+# Use keep.tip to keep only the species in `sp`
+ntrees <- lapply(my.trees, keep.tip, tip = sp)
+
+# Plot some of the final trees
+plot(ntrees[[1]])
+plot(ntrees[[2]])
+plot(ntrees[[603]])
+plot(ntrees[[124]])
+plot(ntrees[[435]])
+plot(ntrees[[1000]])
+```
+# Saving trees
+
+```{r}
+# Save all 1000 trees as a .txt file in Newick format
+mytrees <- ntrees
+class(ntrees) <- "multiPhylo"
+write.tree(mytrees, "data/new_ftrees.txt")
+```

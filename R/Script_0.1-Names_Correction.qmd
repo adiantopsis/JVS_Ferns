@@ -1,0 +1,162 @@
+---
+bibliography: /home/denilsonmachado/Bibliografia/library.bib
+---
+# 0.1 - Getting and correcting taxonomic info 
+
+```{r}
+# You need to install a package named bfphyto to get the correct species names using Flora e Funga do Brasil (2025).
+# To install it, use devtools; the package is hosted on GitHub (github.com/adiantopsis/bfphyto).
+# remotes::install_github('adiantopsis/bfphyto', force = TRUE)
+
+# Now we load the required CRAN packages and bfphyto
+library(skimr)      # For data summarization
+library(tidyverse)  # For data manipulation and
+# visualization (includes dplyr, ggplot2, etc.)
+library(openxlsx)   # To read/write Excel files
+library(readxl)     # To read Excel files
+library(reshape)    # For data reshaping
+library(reshape2)   # Also for reshaping data (acast used later)
+library(bfphyto)    # For taxonomic name resolution using Flora e Funga do Brasil
+library(insight)    # Utility functions for model inspection, might be used later
+
+
+# Set configurations for reproducibility and data formatting
+set.seed(811)          # Set random seed for reproducibility
+options(scipen = 999)  # Avoid scientific notation when printing numbers
+```
+
+# Community Matrix
+```{r}
+# Load species data and environmental data from Excel
+# Remove underscores from species names to work properly with resolveSpp()
+d <- read_xlsx("data/data_ferns.xlsx", sheet = "w_matrix") %>%
+  mutate(taxa = gsub(taxa, pattern = '_', replacement = " "))  # Replace '_' with space in taxa names
+
+e <- read_xlsx("data/data_ferns.xlsx", sheet = 'e_matrix')  # Environmental matrix
+
+# Extract species names and count unique species
+spp <- d$taxa
+as.factor(spp) %>% nlevels()
+```
+# Summarize data
+
+```{r}
+# Summarize the environmental data and write summary to Excel
+resume <- skimr::skim(e)
+# Save data in xlsx
+write.xlsx(resume, file = 'outputs/e_matrix_resume.xlsx')
+```
+# Correcting species names
+
+```{r}
+# Download or load the flora database, using 5 cores for speed and no simplification of data
+flora <- getReflora(cores = 5, simplify = FALSE)
+
+# Resolve species names against the flora database
+my_spp <- resolveSpp(species = spp, flora = flora, simplify = T, hasAuthors = F, wantAuthors = T)
+
+# Select relevant columns and remove duplicated accepted names
+accept_names <- select(my_spp, taxa = SubmittedName, AcceptedName, Distance) %>%
+  filter(!duplicated(AcceptedName))
+# remove name if duplicated. Here Botrypus was duplicated,
+# because the lack of standardization of Flora e Funga do Brasil database.
+
+# Check total matching distance (quality metric)
+sum(my_spp$Distance)
+
+# Inspect species that were not accepted names
+my_spp[my_spp$Status != 'Nome Aceito', ]
+
+# Inspect species with MatchedName pattern 'Dennstaedtia'
+my_spp[grepl(my_spp$MatchedName, pattern = 'Dennstaedtia'), ]
+```
+# Merging the data with the original
+
+```{r}
+df_final <- merge(x = d, y = accept_names, by = 'taxa', all.x = T)
+
+dim(df_final)  # Check dimensions after merge
+
+# Save the merged data with new names to Excel
+write.xlsx(df_final, file = "outputs/data_new_names.xlsx", asTable = TRUE)
+
+# Explore structure of my_spp and count species by family
+glimpse(my_spp)
+
+my_spp %>% group_by(Family) %>%
+  summarise(n = n()) %>%
+  arrange(desc(n))
+```
+
+# Summary frequency table
+
+```{r}
+
+# Summary frequency table
+# Rearrange data by site, then reshape to a site x taxa matrix summing FA_New values
+w <- d %>% arrange(site) |>
+  acast(formula = site ~ taxa, value.var = "FA_New", sum)
+
+# For each species (columns), calculate sum, mean, and count of sites where species occurs
+d <- apply(w, 2, FUN = function(x) {
+  d <- cbind.data.frame(
+    sum = sum(x),
+    mean = mean(x),
+    nsite = length(x[x > 0])
+  )
+  return(d)
+})
+
+# Combine the list of data frames into one dataframe with species names as 'input_name'
+df_concatenado <- do.call(
+  rbind,
+  lapply(names(d), function(nome) {
+    cbind(input_name = nome, d[[nome]])
+  })
+)
+
+# Replace underscores in species names with spaces
+df_concatenado$input_name <- gsub(
+  x = df_concatenado$input_name,
+  replacement = ' ',
+  pattern = "_"
+)
+
+# Merge taxonomic info (Family, SubmittedName, AcceptedName) with the frequency summary
+df_final <- merge(
+  data.frame(
+    Family = my_spp$Family,
+    input_name = my_spp$SubmittedName,
+    aceptedName = my_spp$AcceptedName
+  ),
+  df_concatenado,
+  by = "input_name",
+  all.y = TRUE
+) %>% 
+  arrange(desc(nsite)) %>%
+  distinct(input_name, .keep_all = TRUE) %>%   # Remove duplicate species keeping the first
+  dplyr::rename(
+    'Absolute Frequency Mean' = mean,
+    'Frequency across sites' = nsite
+  )
+
+# View the final dataframe in RStudio viewer
+View(df_final)
+
+# Check unique accepted names
+unique(df_final$aceptedName)
+
+# Check dimensions of df_final2 (Note: df_final2 is not defined in this script — maybe a leftover variable)
+dim(df_final2)
+
+# Count singletons (species found in only 1 site)
+dim(df_final[df_final$nsite == 1, ])
+
+# Count doubletons (species found in exactly 2 sites)
+dim(df_final[df_final$nsite == 2, ])
+
+# Save the summary frequency table to Excel
+write.xlsx(df_final, file = "outputs/summary_freq.xlsx")
+```
+
+

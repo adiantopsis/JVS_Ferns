@@ -1,0 +1,439 @@
+---
+bibliography: /home/denilsonmachado/Bibliografia/library.bib
+---
+# 1.0 - Computing Functional Diversity
+This is the first step of our research, here we are working with raw traits diversity across Atlantic Forest.
+Multiple packages are required to do it.
+
+```{r}
+gc()  # Trigger garbage collection to free up memory
+rm(list = ls())  # Remove all objects from the environment
+
+# Load required libraries
+library(gawdis)
+library(readxl)
+library(reshape2)
+library(tidyverse)
+library(SYNCSA)
+library(openxlsx)
+library(interactions)
+library(bbmle)
+library(here)
+library(jtools)
+require(adespatial)
+require(spdep)
+require(sp)
+
+set.seed(811)  # Set seed for reproducibility
+options(scipen = 999)  # Avoid scientific notation in numeric output
+```
+# Community Matrix 
+My community matrix lives on w_matrix sheet, then we will load it. Then, create matrix (sites x taxa) filled with taxa absolute frequency.
+
+```{r}
+# Read 'w_matrix' sheet from Excel file
+d <- read_xlsx(here("data/data_ferns.xlsx"), sheet = "w_matrix")
+d
+
+# Convert long format to wide: rows = sites, columns = taxa, values = abundances
+w_matrix <- dcast(
+  site ~ taxa,
+  data = d,
+  value.var = "FA_New",
+  fun.aggregate = sum
+) %>%
+  `rownames<-`(.$site) %>%  # Use site names as row names
+  .[, -1] %>%  # Remove the now redundant 'site' column
+  round(digits = 2)  # Round values to 2 decimal places
+
+head(w_matrix, 5L)  # Preview first 5 rows
+```
+# Trait Matrix 
+Now we load the trait matrix, that lives on t_matrix sheet. Then, we standardize and rework this data to transform on numerical, categorical and binary data.
+```{r}
+# Load 't_matrix' sheet from Excel
+t <- read_xlsx("data/data_ferns.xlsx", sheet = "t_matrix")
+
+# View a specific subset of the trait data (example filter)
+t[grepl(t$taxa, pattern = 'Macrothe'), ]$laminae_dissection
+
+str(t)  # Check structure of trait data
+
+# Convert categorical and numerical traits appropriately
+t_matrix <- t %>%
+  mutate(
+    rhizome_type = as.factor(rhizome_type),
+    laminae_dissection = as.numeric(laminae_dissection),
+    frond_morphology = as.factor(frond_morphology)
+  ) %>%
+  column_to_rownames('taxa')  # Set taxa as row names
+
+glimpse(t_matrix)  # Overview of final structure
+head(t_matrix)
+
+# Check consistency between community and trait matrices
+ncol(w_matrix)  # Number of taxa in community matrix
+nrow(t_matrix)  # Number of taxa in trait matrix
+```
+# X Variables
+Finally, we can load the predictor variables. Here we like to emphasize that soil data was obtained from SoilGrigs v. 2.0 [@Poggio] and from WorldClim v. 2.1. 
+```{r}
+# Load 'e_matrix' with environmental data
+x_ncor <- read_xlsx("data/data_ferns.xlsx", sheet = 'e_matrix') %>%
+  filter(Site %in% rownames(w_matrix)) %>%  # Match only sites in w_matrix
+  column_to_rownames('Site') %>%  # Use site names as row names
+  mutate(Site = NULL, ref = NULL)  # Drop unused columns
+
+head(x_ncor)  # Preview environmental variables
+```
+# Organize data 
+We will use SYNCSA to organize our data in a list, matching taxa names and sites in all matrices.
+
+```{r}
+# Create a standardized data list using SYNCSA
+org_data <- organize.syncsa(w_matrix, traits = t_matrix, envir = x_ncor)
+
+org_data  # Show the organized data list
+
+# Check if trait and community taxa names match
+identical(rownames(org_data$traits), colnames(org_data$community))
+
+glimpse(org_data$traits)  # Inspect the trait matrix in the list
+```
+# Functional Diversity
+Now we calculate the functional diversity to our data, we use here 3 groups, based on the type of trait (i.e., 1-competition, 2-protection and 3-reproduction).
+
+```{r}
+# Compute functional distances with trait grouping (1=competition, 2=protection, 3=reproduction)
+full_trait <- gawdis(org_data$traits, groups = c(1, 1, 2, 2, 3, 3, 3, 3))
+full_trait <- as.matrix(full_trait)  # Convert to matrix
+```
+# SES Mean Pairwise Distance - full traits
+Now we compute the MPD for all traits.
+
+```{r}
+# Calculate Standardized Effect Size of MPD with abundance
+ses_mpd_full <- picante::ses.mpd(
+  org_data$community,
+  full_trait,
+  abundance.weighted = TRUE,
+  null.model = "richness"
+) |>
+  rownames_to_column(var = 'Site')
+
+# Combine MPD results with environmental data
+ses <- cbind.data.frame(ses_mpd_full, org_data$environmental)
+
+# Identify sites with significant deviation in functional diversity
+ses_mpd_full %>% filter(mpd.obs.p < 0.1)  # More clustered
+ses_mpd_full %>% filter(mpd.obs.p > 0.95)  # More overdispersed
+```
+# SES without abundance
+
+```{r}
+# Calculate SES MPD without abundance (presence/absence only)
+ses_mpd_pa <- picante::ses.mpd(
+  org_data$community,
+  full_trait,
+  abundance.weighted = FALSE,
+  null.model = "richness"
+) |>
+  rownames_to_column(var = 'Site')
+
+# Combine with environmental data
+ses_pa <- cbind.data.frame(ses_mpd_pa, org_data$environmental)
+
+# Check extreme SES values
+ses_mpd_pa %>% filter(mpd.obs.p < 0.1)
+ses_mpd_pa %>% filter(mpd.obs.p > 0.95)
+```
+# Create name of the models for full dataset
+```{r}
+# Create list of candidate models to explain SES MPD
+models <- c(
+  "ses_mpd_full ~ nitrogen, data = org_data$enviroment",
+  "ses_mpd_full ~ cec, data = org_data$environment",
+  "ses_mpd_full ~ clay, data = org_data$environment",
+  "ses_mpd_full ~ ann_prec, data = org_data$environment",
+  "ses_mpd_full ~ prec_seas, data = org_data$environment",
+  "ses_mpd_full ~ max_temp_wam",
+  "ses_mpd_full ~ 1",
+  "ses_mpd_full ~ prec_seas+ann_prec",
+  "ses_mpd_full ~ cec+nitrogen",
+  "ses_mpd_full ~ ann_prec+max_temp_wam",
+  "ses_mpd_full ~ ann_prec * prec_seas",
+  "ses_mpd_full ~ nitrogen * clay",
+  "ses_mpd_full ~ max_temp_wam * prec_seas"
+)
+```
+# Evaluating models with abundance
+```{r}
+# Fit linear models using abundance-weighted SES MPD
+m1 <- lm(
+  mpd.obs.z ~ nitrogen + plot_size + samp_size,
+  data = ses
+)
+m2 <- lm(
+  mpd.obs.z ~ cec + plot_size + samp_size,
+  data = ses
+)
+m3 <- lm(
+  mpd.obs.z ~ clay + plot_size + samp_size,
+  data = ses
+)
+m4 <- lm(
+  mpd.obs.z ~ ann_prec + plot_size + samp_size,
+  data = ses
+)
+m5 <- lm(
+  mpd.obs.z ~ prec_seas + plot_size + samp_size,
+  data = ses
+)
+m6 <- lm(
+  mpd.obs.z ~ max_temp_wam + plot_size + samp_size,
+  data = ses
+)
+m7 <- lm(
+  mpd.obs.z ~ 1 + plot_size + samp_size,
+  data = ses
+)
+m8 <- lm(
+  mpd.obs.z ~ prec_seas + ann_prec + plot_size + samp_size,
+  data = ses
+)
+m9 <- lm(
+  mpd.obs.z ~ cec + nitrogen + plot_size + samp_size,
+  data = ses
+)
+m10 <- lm(
+  mpd.obs.z ~ ann_prec + max_temp_wam + plot_size + samp_size,
+  data = ses
+)
+m11 <- lm(
+  mpd.obs.z ~ ann_prec * prec_seas + plot_size + samp_size,
+  data = ses
+)
+m12 <- lm(
+  mpd.obs.z ~ nitrogen * clay + plot_size + samp_size,
+  data = ses
+)
+
+m13 <- lm(
+  mpd.obs.z ~ max_temp_wam * prec_seas + plot_size + samp_size,
+  data = ses
+)
+# Compare model fits using AICc
+sel_md <- AICctab(
+  m1,
+  m2,
+  m3,
+  m4,
+  m5,
+  m6,
+  m7,
+  m8,
+  m9,
+  m10,
+  m11,
+  m12,
+  m13,
+  mnames = models,
+  base = T,
+  delta = T
+)
+
+# Filter the best model
+sel_md %>%
+  `class<-`("data.frame") %>%
+  dplyr::filter(dAICc == 0)
+
+sel_md_ab <- sel_md  # Save model selection
+summary(m13)  # Summarize best model
+model_ab <- m13  # Save final selected model
+```
+# Models without abundance
+```{r}
+# Repeat modeling using presence/absence (no abundance)
+m1 <- lm(
+  mpd.obs.z ~ nitrogen + plot_size + samp_size,
+  data = ses_pa
+)
+m2 <- lm(
+  mpd.obs.z ~ cec + plot_size + samp_size,
+  data = ses_pa
+)
+m3 <- lm(
+  mpd.obs.z ~ clay + plot_size + samp_size,
+  data = ses_pa
+)
+m4 <- lm(
+  mpd.obs.z ~ ann_prec + plot_size + samp_size,
+  data = ses_pa
+)
+m5 <- lm(
+  mpd.obs.z ~ prec_seas + plot_size + samp_size,
+  data = ses_pa
+)
+m6 <- lm(
+  mpd.obs.z ~ max_temp_wam + plot_size + samp_size,
+  data = ses_pa
+)
+m7 <- lm(
+  mpd.obs.z ~ 1 + plot_size + samp_size,
+  data = ses_pa
+)
+m8 <- lm(
+  mpd.obs.z ~ prec_seas + ann_prec + plot_size + samp_size,
+  data = ses_pa
+)
+m9 <- lm(
+  mpd.obs.z ~ cec + nitrogen + plot_size + samp_size,
+  data = ses_pa
+)
+m10 <- lm(
+  mpd.obs.z ~ ann_prec + max_temp_wam + plot_size + samp_size,
+  data = ses_pa
+)
+m11 <- lm(
+  mpd.obs.z ~ ann_prec * prec_seas + plot_size + samp_size,
+  data = ses_pa
+)
+m12 <- lm(
+  mpd.obs.z ~ nitrogen * clay + plot_size + samp_size,
+  data = ses_pa
+)
+m13 <- lm(
+  mpd.obs.z ~ max_temp_wam * prec_seas + plot_size + samp_size,
+  data = ses_pa
+)
+
+# Model selection with AICc
+sel_md <- AICctab(
+  m1,
+  m2,
+  m3,
+  m4,
+  m5,
+  m6,
+  m7,
+  m8,
+  m9,
+  m10,
+  m11,
+  m12,
+  m13,
+  mnames = models,
+  base = T,
+  delta = T
+)
+
+# Filter the best model
+sel_md %>%
+  `class<-`("data.frame") %>%
+  dplyr::filter(dAICc == 0)
+
+sel_md_pa <- sel_md  # Save selection results
+summary(m13)  # Summarize selected model
+model_pa <- m13  # Save final model
+```
+
+# Spatial Weighted Matrix 
+
+```{r}
+# Convert lat/lon into projected coordinates
+df_xy <- SoDA::geoXY(
+  latitude = x_ncor$Lat,
+  longitude = x_ncor$Long,
+  unit = 1000
+)
+
+# Compute spatial neighborhood matrix
+dist <- dist(df_xy)
+nb <- chooseCN(coordinates(df_xy), type = 4, plot.nb = FALSE)
+distnb <- nbdists(nb, df_xy)
+
+# Weight neighbors by distance (inverse)
+fdist <- lapply(distnb, function(x) 1 - x / max(dist(df_xy)))
+
+# Create spatial weights list object
+lw <- nb2listw(nb, style = 'B', glist = fdist, zero.policy = TRUE)
+```
+# Testing residuals with abundance
+
+```{r}
+# Get residuals
+res <- residuals(model_ab)
+
+# Check for spatial structure in residuals
+semivario <- nlme::Variogram(res, distance = dist)
+plot(semivario)
+
+# Perform Moran's I test for spatial autocorrelation
+mem <- mem.select(res, lw, method = "MIR", nperm = 999, p.adjust = TRUE)
+
+# Filter results
+sac_ab <- data.frame(
+  I = mem$global.test$obs,
+  Pvalue = mem$global.test$pvalue
+) %>%
+  mutate(model = as.character(model_ab$call)[2], .before = I) %>%
+  `rownames<-`(NULL)
+```
+# Testing residuals without abundance
+
+```{r}
+# Get residuals
+res <- residuals(model_pa)
+
+# Check for spatial structure in residuals
+semivario <- nlme::Variogram(res, distance = dist)
+plot(semivario) # no spatial structure detected
+
+# Perform Moran's I test for spatial autocorrelation
+mem <- mem.select(res, lw, method = "MIR", nperm = 999, p.adjust = T)
+
+# Filter results
+sac_pa <- data.frame(
+  I = mem$global.test$obs,
+  Pvalue = mem$global.test$pvalue
+) %>%
+  mutate(model = as.character(model_pa$call)[2], .before = I) %>%
+  `rownames<-`(NULL)
+```
+# Saving data
+```{r}
+#Raw data
+saveRDS(model_ab, file = "outputs/raw_ses_mod_ab.RDS")
+saveRDS(model_pa, file = "outputs/raw_ses_mod_pa.RDS")
+saveRDS(org_data, file = "outputs/raw_ses_mod_data.RDS")
+saveRDS(ses, file = "outputs/ses_mpd_full.RDS")
+saveRDS(ses_pa, file = "outputs/ses_mpd_full.RDS")
+
+# Spatial result
+openxlsx::write.xlsx(
+  x = list(Moran = sac_pa, AIC = sel_md_pa),
+  'outputs/ses_selection_binary.xlsx'
+)
+openxlsx::write.xlsx(
+  x = list(Moran = sac_ab, AIC = sel_md_ab),
+  'outputs/ses_selection_abundance.xlsx'
+)
+
+# Export models and coefficients
+export_summs(
+  model_ab,
+  model_pa,
+  digits = 3,
+  model.names = c("SES with frequency", "SES binary"),
+  statistics = c(
+    R2 = "r.squared",
+    "AIC",
+    "df",
+    'F-statistic' = 'statistic',
+    N = 'nobs'
+  ),
+  error_format = "({statistic}, p = {p.value})",
+  to.file = "xlsx",
+  file.name = "outputs/ses.mpd.xlsx"
+)
+```

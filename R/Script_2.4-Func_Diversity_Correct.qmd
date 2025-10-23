@@ -1,0 +1,676 @@
+---
+lang: en-US
+bibliography: /home/denilsonmachado/Bibliografia/library.bib
+---
+# 2.4 Computing Functional Diversity W/ Corrected Trait 
+## Packages
+```{r}
+rm(list = ls())  # Clear all objects from the environment
+gc()  # Run garbage collection to free up memory
+library(patchwork)
+library(SYNCSA)
+library(vegan)
+library(readxl)
+source("func/cwm_sig.txt")
+source("func/summarize_trees.R")
+library(openxlsx)
+library(tidyverse)
+library(foreach)
+library(doParallel)
+library(gawdis)
+library(bbmle)
+library(jtools)
+
+set.seed(811)  # Set seed for reproducibility
+options(scipen = 9999)  # Disable scientific notation in outputs
+N <- 1000  # Number of simulations or iterations (e.g., number of trees)
+runs <- 999  # Number of permutations (if needed)
+```
+## Load data 
+
+```{r}
+org_all <- readRDS("data/org_data.RDS")  # Load original data
+scomp <- readRDS("outputs/RDS/SCOMP.RDS")  # Load simulated trait components
+
+```
+## Do Parallel Computing
+
+```{r}
+no_cores <- detectCores() - 5  # Detect available cores, reserve 5 for system
+registerDoParallel(cores = no_cores)  # Register parallel backend
+cl <- makeCluster(no_cores, type = "FORK")  # Create cluster for parallel tasks
+```
+## Organize data
+
+```{r}
+# Structure data for SYNCSA analysis, combining traits and environment
+org_data <- foreach(i = 1:N) %dopar% {
+  organize.syncsa(
+    org_all$community,
+    traits = data.frame(
+      diam = scomp$riz_diam[[i]],
+      rcomp = scomp$riz_comp[[i]],
+      r_cr = scomp$riz_cr[[i]],
+      r_lr = scomp$riz_lr[[i]],
+      lmseg = scomp$lam_mseg[[i]],
+      buds = scomp$buds[[i]],
+      ltri = scomp$ltri[[i]],
+      ind = scomp$ind[[i]],
+      lmorf = scomp$lmorf[[i]],
+      chl = scomp$chl[[i]]
+    ),
+    envir = org_all$environmental
+  )
+}
+```
+## Elaborating Gower Distance Matrix
+
+```{r}
+# Compute Gower distance matrix between trait values, considering trait groups
+all <- foreach(i = 1:N) %dopar% {
+  gawdis(
+    org_data[[i]]$traits,
+    groups = c(1, 1, 1, 1, 2, 3, 2, 3, 3, 3),  # Define trait groupings
+    silent = TRUE
+  ) %>% as.matrix()
+}
+```
+## SES Mean Pairwise Distance weighted by species frequency
+```{r}
+# Compute standardized effect sizes (SES) of MPD for each iteration
+ses.mpd_all <- foreach(i = 1:N) %dopar% {
+  picante::ses.mpd(
+    org_data[[i]]$community,
+    all[[i]],
+    abundance.weighted = TRUE,  # Use species abundances
+    null.model = "richness"  # Null model maintains species richness
+  )
+}
+
+```
+### Running models
+```{r}
+
+# List of candidate linear models to test environmental effects on MPD
+models <- c(
+  "ses.mpd_all[[i]]$mpd.obs.z ~ nitrogen + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ cec + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ clay + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ ann_prec + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ prec_seas + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ max_temp_wam + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ 1 + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ prec_seas+ann_prec + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ cec+nitrogen + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ ann_prec+max_temp_wam + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ ann_prec * prec_seas + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ nitrogen * clay + plot_size + samp_size",
+  "ses.mpd_all[[i]]$mpd.obs.z ~ max_temp_wam * prec_seas + plot_size + samp_size"
+)
+
+# Fit all models in parallel across the 1000 phylogenetic scenarios
+m1 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ nitrogen + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m2 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ cec + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m3 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ clay + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m4 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ ann_prec + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m5 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ prec_seas + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m6 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ max_temp_wam + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m7 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ 1 + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m8 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ prec_seas + ann_prec + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m9 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ cec + nitrogen + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m10 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~
+      ann_prec + max_temp_wam + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m11 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ ann_prec * prec_seas + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m12 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~ nitrogen * clay + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m13 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~
+      max_temp_wam * prec_seas + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+```
+### Selecting models based on AICc
+```{r}
+# Compare all models using AICc and retain best-fitting model
+sel_md <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      m1[[i]],
+      m2[[i]],
+      m3[[i]],
+      m4[[i]],
+      m5[[i]],
+      m6[[i]],
+      m7[[i]],
+      m8[[i]],
+      m9[[i]],
+      m10[[i]],
+      m11[[i]],
+      m12[[i]],
+      m13[[i]],
+      base = T,
+      delta = T,
+      mnames = models[1:13]
+    ) %>%
+      `class<-`("data.frame")
+  }
+```
+### Filtering results for just the best model (delta=0)
+```{r}
+# Keep only models with ΔAICc = 0 (best models)
+result_1 <- foreach(i = 1:N) %dopar%
+  {
+    cbind.data.frame(
+      models = rownames(sel_md[[i]]),
+      sel_md[[i]],
+      row.names = NULL
+    ) %>%
+      dplyr::filter(dAICc == 0)
+  } %>%
+  plyr::ldply(.fun = data.frame)
+head(result_1)
+```
+### Running models again to keep the coefficients
+```{r}
+mods <- foreach(i = 1:N) %do%
+  {
+    lm(formula = result_1$models[i], data = org_data[[i]]$environmental)
+  } 
+ 
+
+# Extract model coefficients and summary statistics
+result <- map_dfr(mods, get_model, mpd = T)
+result_ses.all <- result
+
+# Calculate mean ± SD of coefficient
+mod_ses.all.df <- result %>%
+  group_by(model) %>%
+  summarise(
+    across(
+      .cols = everything(),
+      .fns = function(x) {
+        paste0(round(mean(x, na.rm = T),3),"[", round(sd(x, na.rm=T),3), "]")
+      }
+      )
+  ) %>%
+  ungroup() %>%
+  mutate(nsel= tapply(result$model, result$model, length), .before = 2)
+
+
+mod_ses.all.df
+glimpse(mod_ses.all.df)
+```
+### Plotting MPD correlation with richness
+```{r}
+# Correlation between MPD and species richness
+a <- map_dfr(ses.mpd_all, function(x) {
+  a <- cor.test(x$ntaxa, x$mpd.obs)$estimate
+  b <- cor.test(x$ntaxa, x$mpd.obs)$p.value
+  cbind.data.frame(cor = a, p = b)
+})
+
+a %>%
+  apply(MARGIN = 2, function(x) {
+    rbind(mean = mean(x), sd = sd(x))
+  })
+
+# Save scatter plot to TIFF
+tiff(
+  file = 'figs/mpd_tcor.tiff',
+  width = 180,
+  height = 130,
+  units = "mm",
+  res = 300
+)
+plot(
+  y = ses.mpd_all[[1]]$ntaxa,
+  x = ses.mpd_all[[1]]$mpd.obs,
+  col = "black",
+  bg = alpha("lightgreen", .7),
+  cex = 2,
+  pch = 21,
+  xlab = "Mean Pairwise Distance All Traits (Corrected)",
+  ylab = "Species Richness",
+  family = "serif",
+  alpha = .5
+)
+text(
+  x = 0.1,
+  y = 22,
+  "Frequency Weighted \n Mean Pearson's r = 0.52 [± 0.02]\n P-value = 0.05 [± 0.003]",
+  family = "serif"
+)
+dev.off()
+```
+## SES Mean Pairwise Distance without species frequency
+
+```{r}
+# Same analysis as above, but ignoring species abundance
+ses.mpd_pa <- foreach(i = 1:N) %dopar%
+  {
+    picante::ses.mpd(
+      org_data[[i]]$community,
+      all[[i]],
+      abundance.weighted = F,
+      null.model = "richness"
+    )
+  }
+
+ses.mpd_pa[[100]] %>% filter(mpd.obs.p < 0.1)
+ses.mpd_pa[[100]] %>% filter(mpd.obs.p > 0.9)
+```
+
+### Running models
+
+```{r}
+# Repeat model fitting and selection for presence/absence data
+models <- c(
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ nitrogen + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ cec + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ clay + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ ann_prec + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ prec_seas + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ max_temp_wam + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ 1 + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ prec_seas+ann_prec + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ cec+nitrogen + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ ann_prec+max_temp_wam + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ ann_prec * prec_seas + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ nitrogen * clay + plot_size + samp_size",
+  "ses.mpd_pa[[i]]$mpd.obs.z ~ max_temp_wam * prec_seas + plot_size + samp_size"
+)
+
+m1 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ nitrogen + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m2 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ cec + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m3 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ clay + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m4 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ ann_prec + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m5 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ prec_seas + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m6 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ max_temp_wam + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m7 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ 1 + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m8 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ prec_seas + ann_prec + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m9 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ cec + nitrogen + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m10 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ ann_prec + max_temp_wam + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m11 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ ann_prec * prec_seas + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m12 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~ nitrogen * clay + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+
+m13 <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~
+      max_temp_wam * prec_seas + plot_size + samp_size,
+    data = org_data[[i]]$environmental
+  )
+```
+
+### Selecting models based on AICc
+
+```{r}
+# Filter best models
+sel_md_pa <-
+  foreach(i = 1:N) %dopar%
+  {
+    AICctab(
+      m1[[i]],
+      m2[[i]],
+      m3[[i]],
+      m4[[i]],
+      m5[[i]],
+      m6[[i]],
+      m7[[i]],
+      m8[[i]],
+      m9[[i]],
+      m10[[i]],
+      m11[[i]],
+      m12[[i]],
+      m13[[i]],
+      base = T,
+      delta = T,
+      mnames = models[1:13]
+    ) %>%
+      `class<-`("data.frame")
+  }
+```
+### Filtering results for just the best model (delta=0)
+
+```{r}
+result_2 <- foreach(i = 1:N) %dopar%
+  {
+    cbind.data.frame(
+      models = rownames(sel_md_pa[[i]]),
+      sel_md_pa[[i]],
+      row.names = NULL
+    ) %>%
+      dplyr::filter(dAICc == 0)
+  } %>%
+  plyr::ldply(.fun = data.frame)
+```
+### Running models again to keep the coeficients
+
+```{r}
+mods <- foreach(i = 1:N) %do%
+  {
+    lm(formula = result_2$models[i], data = org_data[[i]]$environmental)
+  }
+
+result <- map_dfr(mods, get_model, mpd = T)
+result[1:50,1:3]
+
+result_ses.pa <- result
+
+mod_ses.pa <- result %>%
+  group_by(model) %>%
+  summarise(
+    across(
+      .cols = everything(), # Aplica a todas as colunas restantes
+      .fns = function(x) {
+        paste0(round(mean(x, na.rm = T),3),"[", round(sd(x, na.rm=T),3), "]")
+      }
+      )
+  ) %>%
+  ungroup() %>%
+  mutate(nsel= tapply(result$model, result$model, length), .before = 2)
+
+mod_ses.pa
+mod_ses.all.df
+identical(mod_ses.all.df, mod_ses.pa)
+```
+### Plotting MPD
+
+```{r}
+a <- map_dfr(ses.mpd_pa, function(x) {
+  a <- cor.test(x$ntaxa, x$mpd.obs)$estimate
+  b <- cor.test(x$ntaxa, x$mpd.obs)$p.value
+  cbind.data.frame(cor = a, p = b)
+})
+a %>%
+  apply(MARGIN = 2, function(x) {
+    rbind(mean = mean(x), sd = sd(x))
+  })
+
+
+tiff(
+  file = 'figs/mpd_tcor_pa.tiff',
+  width = 180,
+  height = 130,
+  units = "mm",
+  res = 300
+)
+plot(
+  y = ses.mpd_pa[[1]]$ntaxa,
+  x = ses.mpd_pa[[1]]$mpd.obs,
+  col = "black",
+  bg = alpha("lightgreen", .7),
+  cex = 2,
+  pch = 21,
+  xlab = "Mean Pairwise Distance All Traits (Corrected)",
+  ylab = "Species Richness",
+  family = "serif",
+  alpha = .5
+)
+text(
+  x = 0.19,
+  y = 22,
+  "Presence/Absence \n Mean Pearson's r = -0.17 [± 0.03]\n P-value = 0.38 [± 0.06]",
+  family = "serif"
+)
+dev.off()
+```
+## Saving data
+
+```{r}
+saveRDS(result_ses.all, file = "outputs/tcor-result_ses_ab.RDS")
+saveRDS(result_ses.pa, file = "outputs/tcor-result_ses_pa.RDS")
+saveRDS(ses.mpd_all, "outputs/ses.tcor_mdp_ab.RDS")
+saveRDS(ses.mpd_pa, "outputs/ses.tcor_mdp_pa.RDS")
+write.xlsx(
+  x = list(SES_AB = mod_ses.all.df, SES_PA = mod_ses.pa),
+  file = "outputs/Corrected/tcor-ses_full.xlsx",
+  rowNames = T
+)
+```
+## Stop multicore computing
+
+```{r}
+stopCluster(cl)
+```
+## Spatial correlation
+### Frequency weighted SES
+```{r}
+# Load spatial analysis packages
+library(vegan)
+library(adespatial)
+library(DHARMa)
+library(SoDA)
+library(sp)
+library(spdep)
+
+# Function to mensure Moran's I based on @Bauman2018 proceed
+test_mem <- function(res, lw, nmodel = NULL) {
+  mem <- mem.select(res, lw, method = "MIR", nperm = 999, p.adjust = T)
+  sac <- data.frame(
+    I = mem$global.test$obs,
+    Pvalue = mem$global.test$pvalue
+  ) %>%
+    mutate(model = nmodel, .before = I) %>%
+    `rownames<-`(NULL)
+  if (length(mem) > 1) {
+    message('Check MEM data for eigenvectors...')
+    mem_data <- list(
+      sac = sac,
+      selected.MEM = mem$MEM.select,
+      summary = mem$summary
+    )
+    return(mem_data)
+  } else {
+    message('No MEM selected...')
+    return(sac)
+  }
+}
+
+#Filter env data based on the rows of ses.mpd matrix
+all_df <- org_data[[1]]$environmental %>%
+  dplyr::filter(rownames(.) %in% rownames(ses.mpd_all[[1]]))
+
+## Creating a cartesian coordinates df, which will permit Euclidean distance usage
+df_xy <- SoDA::geoXY(
+  latitude = all_df$Lat,
+  longitude = all_df$Long,
+  unit = 1000
+)
+dim(df_xy)
+dist <- dist(df_xy)
+
+
+# Create a spatial weighted matrix
+nb <- chooseCN(coordinates(df_xy), type = 4, plot.nb = FALSE)
+distnb <- nbdists(nb, df_xy)
+fdist <- lapply(distnb, function(x) 1 - x / max(dist(df_xy)))
+lw <- nb2listw(nb, style = 'B', glist = fdist, zero.policy = TRUE)
+
+# Create model
+model <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_all[[i]]$mpd.obs.z ~
+      org_data[[i]]$environmental$max_temp_wam *
+        org_data[[i]]$environmental$prec_seas +
+        org_data[[i]]$environmental$samp_size +
+        org_data[[i]]$environmental$plot_size
+  )
+
+#Extract residuals
+res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
+
+# Mensure Moran's I
+ab_moran <- foreach(i = 1:N) %dopar%
+  test_mem(
+    res[[i]],
+    lw,
+    nmodel = 'SES_MFD_AB ~ Max. Temperature * Rainfall Seasonality'
+  )
+
+# Combine results in a DF
+ab_cor_df <- list_rbind(ab_moran)
+```
+
+### Presence/absence SES
+
+```{r}
+model <- foreach(i = 1:N) %dopar%
+  lm(
+    ses.mpd_pa[[i]]$mpd.obs.z ~
+      1 +
+        org_data[[i]]$environmental$samp_size +
+        org_data[[i]]$environmental$plot_size
+  )
+
+res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
+
+pa_moran <- foreach(i = 1:N) %dopar%
+  test_mem(
+    res[[i]],
+    lw,
+    nmodel = 'SES_MFD_PA ~ 1'
+  )
+pa_cor_df <- list_rbind(pa_moran)
+```
+## Save data 
+```{r}
+# Function to compute mean and sd of coeficients (p-value and I)
+resume <- function(x){sapply(x, function(col) {
+  if(is.numeric(col)){
+      mean_1 <- mean(col, na.rm = TRUE)
+      sd_1 <- sd(col, na.rm = TRUE)
+      paste0(round(mean_1, 3), " [±", round(sd_1, 3), "]")} else{
+    unique(col)
+  }
+})
+}
+
+ab <- resume(ab_cor_df) # applying to the frequency weighted model
+pa <- resume (pa_cor_df) # applying to the presence/absence model
+
+# Save in xlsx
+write.xlsx(
+  x = list(ab = ab_cor_df, pa = pa_cor_df, resume = rbind(ab, pa)),
+  file = 'outputs/Corrected/ses_corrected_correlation.xlsx'
+)
+```

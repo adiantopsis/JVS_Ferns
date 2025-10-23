@@ -1,0 +1,281 @@
+# 2.5 Removing Spatial Correlation in Mods. w/ Raw Traits
+ This script require ~3 GiB of RAM Memory
+ Always run  in a clean r-session with an empty environment
+
+# Packages, settings and functions
+```{r}
+rm(list = ls())         # Clear all objects from the environment
+gc()                    # Run garbage collection to free memory
+
+# Function to compute MEM (Moran's Eigenvector Maps) and test for spatial autocorrelation
+test_mem <- function(res, lw, nmodel = NULL) {
+  mem <- mem.select(res, lw, method = "MIR", nperm = 999, p.adjust = T)  # Run MEM selection with permutation
+
+  # Extract global Moran’s I and p-value
+  sac <- data.frame(
+    I = mem$global.test$obs,
+    Pvalue = mem$global.test$pvalue
+  ) %>%
+    mutate(model = nmodel, .before = I) %>%
+    `rownames<-`(NULL)
+
+  # If MEM vectors were selected
+  if (length(mem) > 1) {
+    message('Check MEM data for eigenvectors...')
+    mem_data <- list(
+      sac = sac,                      # Moran's I summary
+      selected.MEM = mem$MEM.select,  # Selected eigenvectors
+      summary = mem$summary           # Full summary with p-values
+    )
+    return(mem_data)
+  } else {
+    message('No MEM selected...')
+    return(sac)
+  }
+}
+
+# Function to summarize model results: mean ± sd for each column (excluding model name)
+get_df <- function (x) {
+  model = x[1, 1]
+  mean = t(apply(x[, -1], MARGIN = 2, function(y)
+           {paste0(round(mean(y),3), '[±', round(sd (y),3), ']')}
+           ))
+  data.frame (model, mean)
+}
+
+# Packages
+# devtools::install_github("cran/SoDA", force = T) #install SoDA to deal with coords
+require(spdep)
+library(ade4)
+library(adespatial)
+library(SoDA)
+library(foreach)
+library(doParallel)
+library(sp)
+library(readxl)
+library(tidyverse)
+library(here)
+
+## Define reproducibility
+set.seed(811)
+## Set the return of numeric values only (not scientific notations)
+options(scipen = 99997) 
+# number of elements (ie. trees or repetitions)
+N = 1000
+```
+
+## Load data
+
+```{r}
+
+all_df <- readRDS(file = 'data/cwm_values_raw.RDS') %>%
+  column_to_rownames('Site')  # Load community-weighted mean values
+
+models <- readxl::read_xlsx(
+  "outputs/Corrected/mod_select_cwm.xlsx",
+  sheet = "nice_mode_S"
+)  # Load selected models per trait
+
+cwm_list <- readRDS("data/cwm_list.RDS")  # Load list of CWM matrices per trait and iteration
+```
+
+## Start parallel computing
+```{r}
+no_cores <- detectCores() - 4  # Use all cores minus 4 (adjust to 5 for desktop)
+registerDoParallel(cores = no_cores)
+cl <- makeCluster(no_cores, type = "FORK")  # Create parallel backend
+```
+
+## Spatial correlation
+### Creating coord. distance matrix
+```{r}
+## Creating a cartesian coordinates df, which will permit Euclidean distance usage
+df_xy <- SoDA::geoXY(
+  latitude = all_df$Lat,
+  longitude = all_df$Long,
+  unit = 1000
+)
+dist <- dist(df_xy) # Compute Euclidean distances
+```
+
+### Spatial Weighted Matrix
+
+```{r}
+nb <- chooseCN(coordinates(df_xy), type = 4, plot.nb = FALSE)  # Create neighborhood graph (MST)
+distnb <- nbdists(nb, df_xy)  # Get pairwise distances for each link
+fdist <- lapply(distnb, function(x) 1 - x / max(dist(df_xy)))  # Convert distances to similarity weights
+
+# Create listw object (spatial weights)
+lw <- nb2listw(nb, style = 'B', glist = fdist, zero.policy = TRUE)
+```
+
+### Creating a connectivity matrix based in Bauman (2018) proceed
+
+```{r}
+models$models
+# Rhyzome diameter
+models[grep("diam", models$models), ]$models
+model <-
+  foreach(i = 1:N) %dopar%
+  # Create model iteratively for the 1000 phylo scenarios
+  lm(
+    cwm_list$diam[[i]] ~ nitrogen + plot_size + samp_size,
+    data = all_df
+  )
+
+# Extract residual
+res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
+
+# Mesure Moran I and p-values
+mem <- foreach(i = 1:N) %dopar%
+  {
+    test_mem(res[[i]], lw, nmodel = 'diam~N')
+  } %>%
+  list_rbind()
+
+# Get summary model results
+sac_diam <- get_df(mem)
+
+# Compact Rhizome
+models$models
+model <-
+  foreach(i = 1:N) %dopar%
+  lm(cwm_list$r_comp[[i]] ~ cec + plot_size + samp_size, data = all_df)
+
+mem <- foreach(i = 1:N) %dopar% {
+    test_mem(res[[i]], lw, nmodel = 'Rhiz. Comp~CEC')
+  } %>%
+  list_rbind()
+
+sac_rcomp <- get_df(mem)
+
+# Short Creeping Rhizome
+models$models
+model <-
+  foreach(i = 1:N) %dopar%
+  lm(cwm_list$r_cr[[i]] ~ ann_prec + prec_seas + plot_size + samp_size, data = all_df)
+
+res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
+
+mem <- foreach(i = 1:N) %dopar%
+  {
+    test_mem(res[[i]], lw, nmodel = 'Rhiz. Short~AP+PS')
+  } %>%
+  list_rbind()
+
+sac_rcr <- get_df(mem)
+
+# Multipinnate laminae
+models$models
+model <- foreach(i = 1:N) %dopar%
+  lm(cwm_list$l_mseg[[i]] ~ ann_prec + plot_size + samp_size, data = all_df)
+
+res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
+
+mem <- foreach(i = 1:N) %dopar%
+  {
+    test_mem(res[[i]], lw, nmodel = 'lmseg~AP')
+  } %>%
+  list_rbind()
+
+sac_lmseg <- get_df(mem)
+
+# Buds
+models[grep("buds", models$models), ]$models
+
+model <- foreach(i = 1:N) %dopar%
+  lm(cwm_list$buds[[i]] ~ ann_prec + plot_size + samp_size, data = all_df)
+
+res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
+
+mem <- foreach(i = 1:N) %dopar%
+  {
+    test_mem(res[[i]], lw, nmodel = 'buds~AP')
+  } %>%
+  list_rbind()
+
+sac_buds <- get_df(mem)
+
+# Frond Dimorphism
+
+models[grep("lmorf", models$models), ]$models
+model <- foreach(i = 1:N) %dopar%
+  lm(cwm_list$lmorf[[i]] ~ ann_prec + plot_size + samp_size, data = all_df)
+
+res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
+
+mem <- foreach(i = 1:N) %dopar%
+  {
+    test_mem(res[[i]], lw, nmodel = 'lmorf~AP')
+  }
+
+mem_result <- foreach(i = 1:N) %dopar%
+  {
+    mem[[i]]$sac
+  } %>%
+  list_rbind()
+
+sac_lmorf <- get_df(mem_result)
+
+mem_morf <- foreach(i = 1:N) %dopar% mem[[i]]$selected.MEM
+
+lapply(mem_morf, ncol) > 1
+
+Iresid <- foreach(i = 1:N) %dopar%
+  {
+    df <- mem[[i]]$summary
+    df[which.max(df$pvalue), ]
+  } %>%
+  list_rbind()
+
+df_resid <- data.frame(
+  model = Iresid[1, 1],
+  mean = t(apply(Iresid[, -1], MARGIN = 2, mean)),
+  sd = t(apply(Iresid[, -1], MARGIN = 2, sd))
+)
+sd()
+
+# Save
+openxlsx::write.xlsx(list(Iresid, df_resid), "outputs/Corrected/summ_residual_I_tcor.xlsx")
+
+# Spore Chlorophyll
+
+models[grep("Chl", models$models), ]$models
+model <- foreach(i = 1:N) %dopar%
+  lm(cwm_list$chl[[i]] ~ prec_seas + plot_size + samp_size, data = all_df)
+
+res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
+
+mem <- foreach(i = 1:N) %dopar%
+  {
+    test_mem(res[[i]], lw, nmodel = 'Chlorophyll~AP')
+  } %>%
+  list_rbind()
+
+sac_chl <- get_df(mem)
+```
+
+## Stop parallel computing ####
+```{r}
+stopCluster(cl)
+```
+## Saving data
+
+```{r}
+# Combine all in a matrix
+cor_df <-
+  rbind(sac_diam, sac_rcr, sac_rcomp, sac_lmseg, sac_buds, sac_lmorf, sac_chl)
+
+
+cor_df$data <- paste0(cor_df$I,"(", cor_df$Pvalue,")") 
+
+cor_df
+
+#Save data
+wb_s_correl <-openxlsx::write.xlsx(
+  file = "outputs/Corrected/models_sac_scomp.xlsx",
+  x = list(df = cor_df, resid_lmorf = Iresid)
+)
+
+saveRDS(mem_morf, file = "outputs/RDS/mem_scomp.RDS")
+```

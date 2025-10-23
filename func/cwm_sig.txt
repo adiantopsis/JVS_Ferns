@@ -1,0 +1,48 @@
+cwm.sig<-function(comm, traits, envir, formula, PGLS = TRUE, tree, AsFactors = NULL, runs = 999){
+  RES <- list(call = match.call())
+  envir <- as.data.frame(envir)
+  if (!is.null(AsFactors)) {
+    for (i in AsFactors) {
+      envir[, i] <- as.factor(envir[, i])
+    }
+  }
+  envir.class <- SYNCSA::var.type(envir)
+  RES$envir.class <- envir.class
+  trait.name <- as.character(stats::as.formula(formula)[[2]])
+  trait <- traits[, trait.name, drop = FALSE]
+  RES$formula <- formula
+  RES$PGLS <- PGLS
+  if(PGLS){
+    cor.phy <- ape::corBrownian(phy = tree)
+    model.pgls <- as.formula(paste(trait.name, "~1", collapse = ""))
+    fit.pgls <- nlme::gls(model = model.pgls, data = as.data.frame(trait), correlation = cor.phy)
+    RES$PGLS.model <- fit.pgls
+    res.fit.pgls <- as.data.frame(residuals(fit.pgls, type = "normalized"))
+    colnames(res.fit.pgls) <- colnames(trait)
+    RES$trait.residuals <- res.fit.pgls
+    trait.temp <- res.fit.pgls
+  } else {
+    trait.temp <- trait
+  }
+  MT <- SYNCSA::matrix.t(comm, trait.temp, scale = FALSE)$matrix.T
+  data.obs <- as.data.frame(cbind(MT, envir))
+  mod.obs <- stats::glm(formula, data = data.obs)
+  F.obs <- stats::summary.lm(mod.obs)$fstatistic[1]
+  RES$model <- mod.obs
+  RES$statistic.obs <- F.obs
+  F.null.site <- matrix(NA, runs, 1) 
+  F.null.trait <- matrix(NA, runs, 1)
+  for (i in 1:runs){
+    MT.null.site <- SYNCSA::permut.row.matrix(MT)$permut.matrix
+    data.null.site <- as.data.frame(cbind(MT.null.site, envir))
+    mod.null.site <- stats::glm(formula, data = data.null.site)
+    F.null.site[i,] <- stats::summary.lm(mod.null.site)$fstatistic[1]
+    MT.null.trait <- SYNCSA::matrix.t(comm, permut.row.matrix(trait.temp)$permut.matrix, scale = FALSE)$matrix.T
+    data.null.trait <- as.data.frame(cbind(MT.null.trait, envir))
+    mod.null.trait <- stats::glm(formula, data = data.null.trait)
+    F.null.trait[i, ] <- stats::summary.lm(mod.null.trait)$fstatistic[1]
+  }
+  RES$prob.site.shuffle <- (sum(ifelse(F.null.site>=F.obs, 1, 0))+1)/(runs+1)
+  RES$prob.trait.shuffle <-(sum(ifelse(F.null.trait>=F.obs, 1, 0))+1)/(runs+1)
+  return(RES)
+}

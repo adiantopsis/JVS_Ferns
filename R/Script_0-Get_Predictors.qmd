@@ -1,0 +1,148 @@
+# ###############################################################################
+# ############## Getting climatic and soil predictors ###########################
+# Packages
+
+```{r}
+# Install 'soilDB' if not already installed
+# install.packages('soilDB')
+
+# Load libraries
+library(readxl)       # To read Excel files
+library(sp)           # For spatial data structures
+library(raster)       # To work with raster data
+library(foreach)      # For parallel processing
+library(doParallel)   # For parallel backend registration
+library(tidyverse)    # For data manipulation and visualization
+library(Hmisc)        # For correlation and statistical functions
+library(corrplot)     # For correlation matrix plotting
+library(skimr)        # For summarizing data
+library(openxlsx)     # For writing Excel files
+```
+
+# Load data 
+Load data and translate as coordinates. 
+```{r}
+env <- read_xlsx("data/data_ferns.xlsx", sheet = "e_matrix")
+
+coords <- data.frame(x = env$Long, y = env$Lat) %>%
+  `rownames<-`(env$Site) %>%
+  SpatialPoints(., proj4string = CRS('+proj=longlat +datum=WGS84 +no_defs'))
+
+```
+# Climatic variables rasters
+# Wordclim data
+We selected three climatic variables:
+- bio_12 = Annual Precipitation (AP);
+- bio_15 = Precipitation Seasonality (PS);
+- bio_10 = Max Temperature of Warmest Month (MT);
+
+```{r}
+bio <- geodata::worldclim_global(
+  path = "gis/worldclim",
+  var = "bio",
+  res = 2.5,
+  download = T
+)
+
+names(bio)
+
+x_var <- bio[[c('wc2.1_2.5m_bio_12', 'wc2.1_2.5m_bio_15', 'wc2.1_2.5m_bio_10')]]
+names(x_var) <- c("AP", "PS", "MT")
+x_var[[1]]
+```
+
+# Concatenate all climatic
+Loop through selected rasters and extract values at site locations.
+
+```{r}
+clim <- foreach(i = 1:3) %do%
+  {
+    raster::extract(x = raster::raster(x_var[[i]]), y = coords)
+  } |>
+  do.call(what = cbind) |>
+  `colnames<-`(c(
+    "AP",
+    "PS",
+    "MT"
+  )) |>
+  as.data.frame() |>
+  mutate(id = env$Site)
+```
+# Soil variables rasters
+Download soil data from SoilGrids (topsoil: 0-5 cm depth). Variables: 
+- clay content (C);
+- nitrogen (N); 
+- cation exchange capacity (CEC).
+```{r}
+# SoilGrid
+soil <- soilDB::fetchSoilGrids(
+  x = env,
+  loc.names = c("Site", 'Lat', 'Long'),
+  depth_intervals = "0-5",
+  variables = c("clay", "nitrogen", "cec")
+)
+# Select soil mean values and clean column names
+var_soil <- dplyr::select(as.data.frame(soil), id, ends_with("mean")) %>%
+  `colnames<-`(gsub(colnames(.), pattern = 'mean', replacement = ''))
+```
+
+# Merge variables
+```{r}
+bio <- merge(clim, var_soil, by = "id")
+```
+# Testing Multicolinearity
+
+```{r}
+# Rename columns to descriptive names
+colnames(bio) <- c(
+  'id',
+  "Ann. Precipitation",
+  "Prec. Seasonality",
+  "Max. Temp.",
+  "Clay",
+  "Nitrogen",
+  "CEC"
+)
+# Calculate correlation matrix and p-values
+correl.b <- rcorr(as.matrix(bio[, -1]))
+# Save correlation matrix to file
+write.table(correl.b$r, "outputs/corr.txt")
+write.xlsx(bio, "data/predictors.xlsx")
+
+
+# Create summary table
+# Generate summary statistics (mean, SD, etc.)
+summary_var <- skim(bio[, -1]) |>
+  mutate(
+    skim_variable = c(
+      "Annual Precipitation Mean (mm)",
+      "Precipitation Seasonality (%CV)",
+      "Max. Temperature in Warmest Month (C*100)",
+      "Clay (g/100g)",
+      "Nitrogen (cg/kg)",
+      "Cation Exchange Capacity (cmol(c)/kg)"
+    )
+  )
+# Save summary statistics to Excel
+write.xlsx(summary_var, "outputs/summary_var.xlsx")
+
+# Create and save a correlation plot (upper triangle only)
+tiff(
+  filename = "figs/correl.tiff",
+  width = 180,
+  height = 180,
+  units = "mm",
+  res = 600
+)
+corrplot(
+  correl.b$r,
+  type = "upper",
+  method= 'number',
+  order = "hclust",
+  p.mat = correl.b$P,
+  sig.level = 0.05,
+  insig = "blank"
+)
+
+dev.off()
+```

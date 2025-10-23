@@ -1,0 +1,329 @@
+---
+bibliography: /home/denilsonmachado/Bibliografia/library.bib
+lang: en
+---
+# 2.2. On Phylogenetic Signal 
+This script we calculate the phylogenetic signal of every trait. We use parallel computing to mesure the signal in each phylogenetic scenario, then mensure mean and deviation. But to do so, this script requires at least 16 GiB of RAM Memory, please run in a clean r-session with an empty environment.
+
+## Packages and settings
+```{r}
+rm(list = ls())  # Clear the R environment
+gc()             # Free up memory
+
+# Load required libraries
+library(caper)        # For comparative data and phylo.d
+library(openxlsx)     # Read/write Excel files
+library(readxl)       # Read Excel files
+library(PVR)          # Phylogenetic eigenvectors
+library(phytools)     # Phylogenetic tools (e.g., phylosig)
+library(tidyverse)    # Tidyverse for data manipulation
+library(foreach)      # Looping with parallel processing
+library(doParallel)   # Backend for foreach (parallel computing)
+
+# Set reproducibility and options
+set.seed(811)
+options(scipen = 99999)  # Prevent scientific notation
+N = 1000                 # Number of trees (simulations)
+```
+## Load data
+Now we will load the 1000 phylogenetic scenario, each scenario is slightly different from each other, due the insertion of 17 (21.52% of total richness) species at the genus root.
+
+```{r}
+mytrees <- read.tree("data/new_ftrees.txt")[1:N] #Load 1000 trees
+summary(is.ultrametric(mytrees))  # Check if trees are ultrametric
+plot(mytrees[[1]])  # Plot the first tree
+
+df <- read_xlsx("data/data_ferns.xlsx", sheet = "t_matrix")  # Load trait data
+
+# Remove node labels from all trees
+mytrees2 <- list()  # Initialize empty list
+
+for (i in seq_along(mytrees)) {
+  mytrees2[[i]] <- mytrees[[i]]
+  mytrees2[[i]]$node.label <- NULL
+}
+mytrees2 <- mytrees2[1:N]
+
+# Filter out species not present in the tree
+df <- filter(df, taxa %in% mytrees[[1]]$tip.label)
+
+## Organize data to match species names between tree and trait data
+org_traits <-
+  foreach(i = 1:N) %do%
+  {
+    df[match(mytrees2[[i]]$tip.label, df$taxa), ]
+  }
+
+# Check if species order matches in several examples
+identical(org_traits[[2]]$taxa, mytrees[[2]]$tip.label)
+identical(org_traits[[100]]$taxa, mytrees[[100]]$tip.label)
+identical(org_traits[[414]]$taxa, mytrees[[918]]$tip.label)
+identical(org_traits[[222]]$taxa, org_traits[[221]]$taxa)
+```
+## Do Parallel Computing
+
+```{r}
+no_cores <- detectCores() - 4  # Reserve 4 cores for the system
+registerDoParallel(cores = no_cores)  # Register backend
+cl <- makeCluster(no_cores, type = "FORK")  # Create parallel cluster
+```
+## K statistic (Blomberg’s K) for rhizome diameter (continuous trait)
+K statistic is a proceedure proposed by @Blomberg2003. Here we apply it for the 1000 phylogenetic scenario, extract the mean an it standard deviation. 
+```{r}
+## Extract rhizome diameter for each tree/species combination
+r_diam <-
+  foreach(i = 1:N) %do%
+  setNames(object = org_traits[[i]]$rhizome_diameter, nm = org_traits[[i]]$taxa)
+
+# Calculate K statistic in parallel
+K_diam <- foreach(i = 1:N, .combine = c, .verbose = T) %dopar%
+  {
+    phylosig(mytrees[[i]], r_diam[[i]], method = "K", nsim = 1000, test = T)$K
+  }
+
+# Extract associated p-values
+K_diam_P <- foreach(i = 1:N, .combine = c, .verbose = T) %dopar%
+  {
+    phylosig(mytrees[[i]], r_diam[[i]], method = "K", nsim = 1000, test = T)$P
+  }
+
+# Combine K and p-values into a data frame
+rhiz_diam <- cbind.data.frame(K = K_diam, pvalue = K_diam_P)
+
+# Summary statistics for K
+rhiz_diam_K <- data.frame(
+  K = mean(rhiz_diam$K),
+  min_K = min(rhiz_diam$K),
+  max_K = max(rhiz_diam$K),
+  sigs = sum(ifelse(rhiz_diam$pvalue <= 0.05, 1, 0) / 1000)
+)
+
+```
+## D Statistic for the binary traits 
+D statistic is a proceedure proposed by @Fritz2010. Here we apply it for the 1000 phylogenetic scenario, extract the mean an it standard deviation. 
+
+```{r}
+## Function to create comparative data objects for each tree
+comp_dat <- function(x, y) {
+  for (i in seq_along(mytrees2)) {
+    y[[i]] <- comparative.data(mytrees2[[i]], x, names.col = "species")
+  }
+  return(y)
+}
+
+## Function to run phylo.d in parallel
+phy_d <- function(x) {
+  foreach(i = seq_along(mytrees2)) %dopar%
+    {
+      phylo.d(x[[i]], binvar = trait)
+    }
+}
+
+## Function to convert phylo.d output to a data frame
+d_df <- function(x, y) {
+  for (i in seq_along(mytrees2)) {
+    y[i, 1] <- x[[i]]$DEstimate
+    y[i, 2] <- x[[i]]$Pval1
+    y[i, 3] <- x[[i]]$Pval0
+  }
+  colnames(y) <- c("D", "P1", "P0")
+  return(y)
+}
+```
+### Rhizome type (categorical trait split into three types)
+```{r}
+# Create binary trait tables for each rhizome type
+rhiz_type2 <- table(
+  names = org_traits[[1]]$taxa,
+  trait = org_traits[[1]]$rhizome_type
+)
+
+rhiz_comp <- data.frame(
+  species = rownames(rhiz_type2),
+  trait = rhiz_type2[, "Compact"],
+  row.names = NULL
+)
+
+rhiz_crep <- data.frame(
+  species = rownames(rhiz_type2),
+  trait = rhiz_type2[, "Short-Creeping"],
+  row.names = NULL
+)
+
+rhiz_lrep <- data.frame(
+  species = rownames(rhiz_type2),
+  trait = rhiz_type2[, "Long-Creeping"],
+  row.names = NULL
+)
+
+
+##Empty objects to insert values
+
+list_emp <- vector(mode = "list", length = length(mytrees2))
+matr_emp <- matrix(NA, nrow = length(mytrees2), ncol = 3)
+
+rhiz_comp_D <- comp_dat(x = rhiz_comp, y = list_emp) %>%
+  phy_d() %>%
+  d_df(y = matr_emp)
+
+rhiz_cr_D <- comp_dat(x = rhiz_crep, y = list_emp) %>%
+  phy_d() %>%
+  d_df(y = matr_emp)
+
+rhiz_lr_D <- comp_dat(x = rhiz_lrep, y = list_emp) %>%
+  phy_d() %>%
+  d_df(y = matr_emp)
+
+mean(rhiz_comp_D[, 1])
+mean(rhiz_cr_D[, 1])
+```
+### Multipinnate laminae (binary trait) 
+```{r}
+gc()  # Garbage collection
+lam_type1 <- org_traits[[1]]
+lam_mult <- data.frame(
+  species = lam_type1$taxa,
+  trait = lam_type1$laminae_dissection,
+  row.names = NULL
+) # laminae multisegmented (from 2:n)
+
+lam_mult_D <- comp_dat(x = lam_mult, y = list_emp) %>%
+  phy_d() %>%
+  d_df(y = matr_emp)
+
+mean(lam_mult_D[, 1])
+```
+### Presence of proliferous buds
+```{r}
+gc()# Garbage collection
+buds <- data.frame(
+  species = df$taxa,
+  trait = df$proliferous_buds,
+  row.names = NULL
+)
+
+buds_D <- comp_dat(x = buds, y = list_emp) %>%
+  phy_d() %>%
+  d_df(y = matr_emp)
+
+mean(buds_D[, 1])
+sd(buds_D[, 1])
+```
+### Frond morphology
+```{r}
+gc()
+lam_morf <- table(names = df$taxa, trait = df$frond_morphology)
+lam_dim <- data.frame(
+  species = rownames(lam_morf),
+  trait = lam_morf[, 1],
+  row.names = NULL
+) # laminae dimorphism
+
+lam_dim_D <- comp_dat(x = lam_dim, y = list_emp) %>%
+  phy_d() %>%
+  d_df(y = matr_emp)
+
+mean(lam_dim_D[, 1])
+# mean(lam_mon_D[,1])
+```
+### Trichomes in laminae
+```{r}
+gc()
+lam_tri <- data.frame(
+  species = df$taxa,
+  trait = df$laminae_pubescence,
+  row.names = NULL
+)
+
+lam_tri_D <- comp_dat(x = lam_tri, y = list_emp) %>%
+  phy_d() %>%
+  d_df(y = matr_emp)
+```
+### Indusium 
+```{r}
+gc()
+#for knowledge, pseudo-indusium (pteridoids) was considered indusium analogous
+
+indu <- data.frame(species = df$taxa, trait = df$indusium, row.names = NULL)
+indu_D <- comp_dat(x = indu, y = list_emp) %>% phy_d() %>% d_df(y = matr_emp)
+```
+### Spore Chlorophyll
+```{r}
+gc()
+chl <- data.frame(
+  species = df$taxa,
+  trait = df$spore_chlorophyll,
+  row.names = NULL
+)
+chl_D <- comp_dat(x = chl, y = list_emp) %>% phy_d() %>% d_df(y = matr_emp)
+```
+## Stop Parallel computing 
+
+```{r}
+stopCluster(cl)
+```
+## Outputting data 
+
+```{r}
+# Create a list of D statistics
+D_list <- vector(mode = "list")
+D_list[[1]] <- rhiz_comp_D
+D_list[[2]] <- rhiz_cr_D
+D_list[[3]] <- rhiz_lr_D
+D_list[[4]] <- lam_mult_D
+D_list[[5]] <- lam_dim_D
+D_list[[6]] <- lam_tri_D
+D_list[[7]] <- buds_D
+D_list[[8]] <- indu_D
+D_list[[9]] <- chl_D
+
+
+## Function to summarise all data
+count <- function(x) {
+  D <- capture.output(cat(
+    round(mean(x[, 1]), 2),
+    "[",
+    round(range(x[, 1]), 2),
+    "]"
+  ))
+  P0 <- length(which(x[, 3] <= 0.05))
+  P1 <- length(which(x[, 2] <= 0.05))
+  vec <- rbind(D, P0, P1)
+
+  return(vec)
+}
+names <- c(
+  'riz_comp',
+  "riz_cr",
+  "riz_lr",
+  "lam_mult",
+  "lam_dim",
+  "lam_tri",
+  "buds",
+  "ind",
+  'chl'
+)
+
+
+## Summarising all
+D_matrix <- foreach(i = seq_along(D_list), .combine = cbind) %do%
+  {
+    count(D_list[[i]])
+  }
+
+rownames(D_matrix) <- c("D", "P0", "P1")
+colnames(D_matrix) <- names
+
+## Add Bloomberg K in the raw list
+D_list[[11]] <- rhiz_diam
+```
+### Save data
+
+```{r}
+write.xlsx(list(D = D_matrix, K = rhiz_diam_K), file = "outputs/phylo_sig.xlsx")
+
+### Save raw data
+saveRDS(D_list, file = "outputs/phylo_sig_result.RDS")
+D_list <- readRDS("outputs/phylo_sig_result.RDS")
+```
+

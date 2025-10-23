@@ -1,0 +1,322 @@
+---
+lang: en-US
+bibliography: /home/denilsonmachado/Bibliografia/library.bib
+---
+
+# 2.6 CWM SIG W/ corrected traits 
+This script evaluates the significance of community-weighted means (CWMs) for corrected trait data. It performs permutation-based testing (CWM.sig), integrates spatial structure (MEMs), runs parallel computations, and summarizes results across 1000 simulations.
+
+Note: This script requires more than 8 GiB of RAM and should be run in a fresh R session with an empty environment.
+
+```{r}
+# This script require more than 8 GiB of RAM Memory
+# Always run in a clean r-session with an empty environment
+
+rm(list = ls())   # Clear all objects from the workspace
+gc()              # Clean up unused memory
+
+# Load required packages
+library(SYNCSA)
+library(ape)
+library(openxlsx)
+library(vegan)
+library(car)
+library(readxl)
+library(openxlsx)
+library(tidyverse)
+library(foreach)
+library(doParallel)
+
+# Source user-defined functions
+source("func/summarize_trees.R")   # Function to summarize CWM.sig results
+source("func/cwm_sig.txt") # CWM.sig function
+```
+
+# Start
+
+```{r}
+set.seed(811) ## Define reproducibility
+## Set the return of numeric values only (not scientific notations)
+options(scipen = 999)
+N = 1000 # number of elements (ie. trees or repetitions)
+runs = 9999 # number of iteration for CWM.Sig
+```
+
+# Load data
+
+```{r}
+org_data <- readRDS("data/org_data.RDS")
+#Load adjusted traits corrected
+scomp <- readRDS("outputs/RDS/SCOMP.RDS")
+#Load models
+models <- read_xlsx("outputs/Corrected/mod_select_cwm.xlsx", sheet = "nice_mode_S")
+# Load Moran Eigenvector Maps
+mem_scomp <- readRDS("outputs/mem_scomp.RDS")
+```
+
+# Start parallel computing
+```{r}
+no_cores <- detectCores() - 10  # Adjust core usage depending on machine, try to set less cores to do not
+## occupy too much memory during the permutations of CWM.SIG
+registerDoParallel(cores = no_cores)
+cl <- makeCluster(no_cores)     # Initialize cluster
+```
+
+# Computing CWM for corrected data
+```{r}
+# Rhyzome Diameter
+models$models[models$n_sel>500]
+view(models)
+# First we organize data with community, trait corrected for
+# phylogeny and env.
+# I organize trait data based on the tree tips organization.
+# Community data was organized matching with env data.
+
+diam <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      traits = data.frame(diam = scomp$riz_diam[[i]]),
+      envir = org_data$environmental
+    )
+  }
+
+# Now, we are using foreach to compute CWM.Sig
+# This function is available on func/table_cwm.R
+# It only organize the CWM.Sig results for each phylogenetic
+# scenario in a data.frame and automatize the use of MEM.
+# Setting .combine as rbind makes each result be combined by rows.
+
+result_diam <- foreach(i = 1:N, .combine = 'rbind') %dopar%
+  {
+    get_cwm(
+      comm = diam[[i]]$community,
+      trait = diam[[i]]$traits,
+      env = diam[[i]]$environmental,
+      formula = diam ~ nitrogen + plot_size + samp_size,
+      runs = runs, model = F
+    )
+  }
+
+# This function only resumes the results of get_cwm
+# in one data.frame, computing mean and sd for each parameter
+sig.diam.df <- table_cwm(result_diam)
+
+# We need to free some memory space
+gc()
+
+# After we repeat the process for each trait...
+# Short Creeping Rhizome
+models[grep(x = models$models, "Short"), ]
+models[grep(x = models$models, "Short"), 2]
+
+rcr <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      traits = data.frame(r_cr = scomp$riz_cr[[i]]),
+      envir = org_data$environmental
+    )
+  }
+
+result_rcr <- foreach(i = 1:N, .combine = 'rbind') %dopar%
+  {
+    get_cwm( model = F,
+      comm = rcr[[i]]$community,
+      trait = rcr[[i]]$traits,
+      env = rcr[[i]]$environmental,
+      formula = r_cr ~ ann_prec + prec_seas + plot_size + samp_size,
+      runs = runs
+    )
+  }
+
+sig.rcr.df <- table_cwm(result_rcr)
+
+gc()
+
+# Compact Rhizome
+models[grep(x = models$models, "rcomp"), ] #show first model
+models[grep(x = models$models, "rcomp"), 1] #show first model
+
+rcomp <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      traits = data.frame(rcomp = scomp$riz_comp[[i]]),
+      envir = org_data$environmental
+    )
+  }
+
+result_rcomp <- foreach(i = 1:N, .combine = 'rbind') %dopar%
+  {
+    get_cwm( model = F,
+      comm = rcomp[[i]]$community,
+      trait = rcomp[[i]]$traits,
+      env = rcomp[[i]]$environmental,
+      formula = rcomp ~ cec + plot_size + samp_size,
+      runs = runs
+    )
+  }
+
+sig.rcomp.df <- table_cwm(result_rcomp)
+
+
+gc()
+
+# Laminar segmentation
+models$models
+models[grep(x = models$models, "mseg"), 1] #show first model
+
+lmseg <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      traits = data.frame(lmseg = scomp$lam_mseg[[i]]),
+      envir = org_data$environmental
+    )
+  }
+
+result_lmseg <- foreach(i = 1:N, .combine = 'rbind') %dopar%
+  {
+    get_cwm( model = F,
+      comm = lmseg[[i]]$community,
+      trait = lmseg[[i]]$traits,
+      env = lmseg[[i]]$environmental,
+      formula = lmseg ~ ann_prec + plot_size + samp_size,
+      runs = runs
+    )
+  }
+
+
+sig.lmseg.df <- table_cwm(result_lmseg)
+
+gc()
+
+# Buds
+models$models
+buds <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      traits = data.frame(buds = scomp$buds[[i]]),
+      envir = org_data$environmental
+    )
+  }
+
+result_buds <- foreach(i = 1:N, .combine = 'rbind') %dopar%
+  {
+    get_cwm( model = F,
+      comm = buds[[i]]$community,
+      trait = buds[[i]]$traits,
+      env = buds[[i]]$environmental,
+      formula = buds ~ ann_prec + plot_size + samp_size,
+      runs = runs
+    )
+  }
+
+# Summary  results of cwm.sig
+sig.buds.df <- table_cwm(result = result_buds)
+
+gc()
+# Laminae dimorphism
+models$models
+lmorf <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      traits = data.frame(lmorf = scomp$lmorf[[i]]),
+      envir = org_data$environmental
+    )
+  }
+
+result_lmorf <- foreach(i = 1:N) %dopar%
+  {
+    get_cwm( model = F,
+      comm = lmorf[[i]]$community,
+      trait = lmorf[[i]]$traits,
+      env = lmorf[[i]]$environmental,
+      formula = lmorf ~ ann_prec + plot_size + samp_size,
+      runs = runs
+    )
+  } %>%
+  bind_rows()
+
+# Summary  results of cwm.sig
+sig.lmorf.df <- table_cwm(result_lmorf) %>%
+  bind_rows() %>%
+  mutate_all(as.character)
+
+gc()
+
+# Spore Chlorophyll
+models$models
+chl <- foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_data$community,
+      traits = data.frame(chl = scomp$chl[[i]], mem_scomp[[i]]),
+      envir = org_data$environmental
+    )
+  }
+
+result_chl <- foreach(i = 1:N) %dopar%
+  {
+    get_cwm( model = F,
+      comm = chl[[i]]$community,
+      trait = chl[[i]]$traits,
+      env = cbind.data.frame(chl[[i]]$environmental, mem_scomp[[i]]), # To this model we need to indicate MEMs
+      # due to spatial autocorrelation detected before
+      formula = chl ~ prec_seas + plot_size + samp_size,
+      runs = runs
+    )
+  } %>%
+  bind_rows()
+
+# Summary  results of cwm.sig
+sig.chl.df <- table_cwm(result_chl) %>%
+  bind_rows() %>%
+  mutate_all(as.character)
+
+gc()
+# -> Stop parallel computing ####
+stopCluster(cl)
+```
+ 
+# Output data 
+
+```{r}
+# Here, I united the raw data (from get_cwm) in
+# one df
+
+cwm.results_full <-
+  full_join(result_rcr, result_diam) %>%
+  full_join(result_rcomp) %>%
+  full_join(result_buds) %>%
+  full_join(result_lmseg) %>%
+  full_join(result_lmorf) %>%
+  full_join(result_chl) 
+
+
+# Here, I united the summaries (from table_cwm) in
+# one df
+cwm.results <-
+  full_join(sig.rcr.df, sig.diam.df) %>%
+  full_join(sig.rcomp.df) %>%
+  full_join(sig.buds.df) %>%
+  full_join(sig.lmseg.df) %>%
+  full_join(sig.lmorf.df) %>%
+  full_join(sig.chl.df) 
+```
+
+# Saving data
+```{r}
+wb_cwm <- list(full_result = cwm.results_full, summary = cwm.results)
+
+write.xlsx(
+  x = wb_cwm,
+  file = "outputs/Corrected/cwm_sig_tcor.xlsx",
+  keepNA = T,
+  rowNames = T
+)
+```
+
