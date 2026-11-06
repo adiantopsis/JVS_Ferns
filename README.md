@@ -1,11 +1,10 @@
+# Dataset from JVS submitted Article
 
-## Dataset from JVS submitted Article
-
-Machado, D., Jarenkow, J. A., & Seger, G. (2025). Data from: WHAT DOES FUNCTIONAL DIVERSITY AND PHYLOGENETIC SIGNAL REVEAL ABOUT SOUTHERN BRAZILIAN TERRESTRIAL FERNS' ENVIRONMENTAL PREFERENCES? [Data set]. In Journal of Vegetation Science (2.0). Zenodo. https://doi.org/10.5281/zenodo.17341176
+Machado, D., Jarenkow, J. A., & Seger, G. (2026). Data from: Disentangling the roles of phylogeny and environment in shaping functional diversity of terrestrial ferns in the southern Brazilian Atlantic Forest [Dataset]. In Journal of Vegetation Science. Zenodo. https://doi.org/10.5281/zenodo.21751278
 
 ### Title: 
 
-**What does functional diversity and phylogenetic signal reveal about Southern Brazilian terrestrial ferns' environmental preferences?**
+**Disentangling the roles of phylogeny and environment in shaping functional diversity of terrestrial ferns in the southern Brazilian Atlantic Forest**
 
 
 ### **Authors:**
@@ -14,13 +13,12 @@ _Machado, Denilson; Jarenkow, João André & Seger, Guilherme_
 
 ### **Abstract:**
 
-Questions: Our study focuses on the following questions: 1) Do the climatic and edaphic conditions of the Southern Brazilian Atlantic Forest impact terrestrial ferns' functional diversity? 2) Which morphological functional traits are most relevant for terrestrial ferns in response to climatic and edaphic changes? 3) If there are trait-environment relationships, what adaptive eco-evolutionary mechanisms can be inferred from them?
+Questions: 1) Do climatic and edaphic conditions influence the functional diversity of terrestrial ferns in the southern Atlantic Forest? 2) Which morphological functional traits are most relevant to climatic and edaphic variation? 3) What adaptive eco-evolutionary mechanisms can be inferred from them?
 
-Study site: Subtropical Atlantic Forest, encompassing Rio Grande do Sul, Santa Catarina, and Paraná States, Brazil.
+Location: States of Rio Grande do Sul, Santa Catarina, and Paraná, southern Brazil.
 
-Method: We analyzed eleven morphological traits related to resistance, competitive advantage, and reproductive success. All traits were analyzed with and without phylogenetic correction to compute multi-trait functional diversity using the standardized effect size of mean functional distance and functional composition via the community-weighted mean. Both metrics were weighted by the absolute frequency of species within sites. Subsequently, we identified the most influential climatic or edaphic drivers based on linear models. To assess the significance of trait-environment relationships, we employed a permutational approach.
+Methods: We analyzed ten morphological traits related to environmental resistance, competitive ability, and reproductive strategy. To assess functional diversity and trait-environment relationships, we evaluated traits both with and without phylogenetic correction. Subsequently, linear models were used to identify the most influential climatic or edaphic drivers, a permutational framework was applied to test the significance of these relationships.
 
-Results: The functional diversity of terrestrial ferns correlates with rainfall and temperature, with subtle changes when taking into account the phylogenetic relationship of species. Similarly, competitive and reproductive traits were associated with annual rainfall and rainfall seasonality. However, most morphological traits vary independently of edaphic and climatic factors, regardless of whether phylogenetic relatedness is considered or not. Few traits, specifically related to resistance and competition, were dispersed across the phylogeny and were not linked with any factor evaluated, leaving the question of their true determinants unanswered.
+Results: Functional diversity of terrestrial ferns correlated with rainfall and temperature, showing subtle shifts after phylogenetic correction. Competitive and reproductive traits were associated with annual rainfall and rainfall seasonality. However, most morphological traits varied independently of the evaluated drivers, regardless of whether phylogenetic relatedness was considered. A few traits, specifically those related to resistance and competitive ability, were dispersed across the phylogeny and showed no association with the measured factors. This suggests that such traits may be shaped by unmeasured microenvironmental factors or neutral evolutionary processes.
 
-Conclusions: Combining functional and phylogenetic information on terrestrial ferns indicates that species morphology response highly depends on the scale observed. Our analyses demonstrate that climatic and not edaphic factors are the primary drivers of trait diversity in terrestrial ferns within the Subtropical Atlantic Forest, influencing most evaluated traits. These findings may help predict the distribution of terrestrial ferns amidst the increasing trend of land use and cover changes in the Atlantic Forest domain.
-
+Conclusions: Our analyses demonstrate that climatic rather than edaphic factors are the primary drivers of trait diversity in terrestrial ferns within the Subtropical Atlantic Forest, influencing most evaluated traits. These findings help project how terrestrial fern assemblages may respond in the face of increasing land-use and land-cover changes across the Atlantic Forest domain.
