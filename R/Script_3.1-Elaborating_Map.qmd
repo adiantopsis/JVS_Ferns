@@ -1,0 +1,230 @@
+---
+title: "Sites mapping"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+# About This Script
+
+This script is for plotting our map (Appendix S1).
+
+```{r}
+# devtools::install_github("rspatial/geodata")
+# devtools::install_github("rpradosiqueira/brazilmaps")
+
+library(ggnewscale)
+library(tidyverse)
+library(readxl) 
+library(sf)     
+library(sp)      
+library(ggspatial)
+library(geobr)   
+library(ggplot2) 
+library(here)
+library(raster)
+library(scales)
+library(tidyterra)
+library(geodata)
+
+
+```
+
+# Load shapefile of world and our sites coordinates
+
+```{r}
+
+world <- world(path = here("gis/"))
+
+# Load fern sampling coordinates (Latitude and Longitude) from Excel
+p <- read_xlsx(here("data/data_ferns.xlsx"), sheet = "e_matrix")[, c("Lat", "Long")]
+
+dim(p)  # Check the dimensions of the coordinates dataframe
+```
+
+# Load Atlantic Forest limits and getting states limits
+
+```{r}
+flo_typ <- read_sf(here("gis/ma_limite_integrador.shp")) |> 
+  st_as_sf()
+
+# Get map of Brazilian states (as 'sf' object)
+# states <- geobr::read_state(year=2019, output = "sf")
+
+states <- readRDS(here("gis/gadm36_BRA_1_sp.rds")) |> 
+  st_as_sf()
+
+br <- filter(world, NAME_0 == "Brazil") |> st_as_sf()
+
+# plot(states)
+```
+
+# Load elevation data
+```{r}
+elevation <- elevation_30s("BRA", path= here("gis/"), mask = T)
+elevation_low <- aggregate(elevation, fact = 4, fun = mean, na.rm = TRUE)
+ele_df<- as.data.frame(elevation_low, xy = T) %>% 
+  na.omit()
+
+
+grad_hypso <- hypso.colors(10, "meyers_hypso") # Color gradient
+```
+
+# Plotting
+
+```{r}
+ggplot() +
+  
+# Plot the world map in the background
+geom_sf(
+    data = st_as_sf(world),
+    aes(linetype = "Country Limits"),
+    color = "gray50",
+    fill = "white",
+    size = 0.3
+  ) +
+  geom_tile(data = elevation, aes(x = x, y = y, fill = BRA_elv_msk)) +
+  scale_fill_gradientn(name = "Elevation (m)",
+                       colors = grad_hypso,
+                       na.value = NA,
+                       limits = c(0, 1900))+ 
+  ggnewscale::new_scale_fill()+
+
+  # Plot the Atlantic Forest polygons
+  geom_sf(
+    data = flo_typ,
+    aes(col = "Atlantic Forest"),
+    linewidth = .5,
+    fill = "green",
+    alpha = .05
+  ) +
+
+  # Add Brazilian state borders
+  geom_sf(
+    data = states,
+    aes(linetype = "Brazilian States Limits"),
+    color = "black",
+    fill = NA,
+    lwd = 0.3,
+    alpha = 0.7
+  ) +
+
+  # Define the fill color for Atlantic Forest
+  scale_colour_manual(
+    values = c("Atlantic Forest" = "green4"),
+    name = NULL
+  ) +
+
+  # Define line types for country and state borders
+  scale_linetype_manual(
+    values = c("Country Limits" = "solid", "Brazilian States Limits" = "solid"),
+    name = NULL
+  ) +
+
+  # Add caption about data and source
+  labs(
+    caption = "Datum WGS84\nIntegrative boundaries of the Atlantic Forest (Muylaert et al. 2018)"
+  ) +
+
+  # Start a new fill scale so we can add a different legend for the sites
+  new_scale_fill() +
+
+  # Add sampling sites as red circles
+  geom_point(
+    data = p,
+    aes(x = Long, y = Lat, fill = "Sites"),
+    color = "black",
+    size = 3,
+    stroke = .5,
+    shape = 21,  # Circle with fill
+    alpha = .8
+  ) +
+
+  # Define the fill color for the sites
+  scale_fill_manual(
+    values = c("Sites" = "darkred"),
+    name = " "
+  ) +
+  # Zoom to the region of interest (southern Brazil and surroundings)
+  coord_sf(
+    xlim = c(-58, -47.9),
+    ylim = c(-33.8, -25),
+    crs = 4326,
+    expand = FALSE
+  ) +
+
+  # Add a scale bar to the map
+  annotation_scale(
+    location = "br",  # Bottom right
+    width_hint = 0.2,
+    unit_category = "metric",
+    line_width = 2,
+    text_cex = 0.6,
+    text_col = "black"
+  ) +
+
+  # Add a north arrow to the map
+  annotation_north_arrow(
+    location = "br",
+    which_north = "true",
+    style = north_arrow_fancy_orienteering(text_size = 0),
+    height = unit(1.5, "cm"),
+    width = unit(1.5, "cm"),
+    pad_y = unit(0.8, "cm")
+  ) +
+  # Add ocean and neighboring country labels
+  geom_text(aes(x = -49, y = -31, label = "Atlantic Ocean"), angle = 0, size = 3) +
+  geom_text(aes(x = -56.5, y = -32, label = "Uruguay"), size = 3) +
+  geom_text(aes(x = -57, y = -28.5, label = "Argentina"), angle = 0, size = 3) +
+  geom_text(aes(x = -57, y = -26.5, label = "Paraguay"), size = 3) +
+  geom_text(aes(x = -51.5, y = -25.5, label = "Paraná"), size = 3) +
+  geom_text(aes(x = -50.8, y = -27.2, label = "Santa Catarina"), size = 3) +
+  geom_text(aes(x = -53, y = -29.6, label = "Rio Grande do Sul"), size = 3) +
+
+
+  theme_bw(base_size = 9) +  # Use black-and-white base theme
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    legend.margin = margin(r = 1, l = 1, t = 0.5, b = 1),
+    legend.title = element_text(size = 9),
+    legend.key = element_rect(fill = "transparent"),
+    legend.text.align = 0,
+    legend.position = 'top',
+    panel.grid = element_blank(),
+
+    # Use blue background for oceans
+    panel.background = element_rect(fill = "skyblue")
+  )
+
+
+```
+# Saving our Appendix S1 
+
+```{r}
+ggsave(
+  path = here("figs/"),
+  filename = "map2.tiff",
+  device = "tiff",
+  dpi = 500,
+  width = 180,
+  height = 180,
+  units = "mm"
+)
+
+```

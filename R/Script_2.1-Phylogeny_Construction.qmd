@@ -1,11 +1,36 @@
 ---
-bibliography: /home/denilsonmachado/Bibliografia/library.bib
-lang: us
+title: "Elaborating Phylogenetic Hypotheses Based on the Nitta et al. (2022) tree"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
 ---
-# 2.1. Creating Phylogenetic Scenarios 
-In this phase we will elaborate a phylogenetic tree based on ftolr package megatree [@Nitta]. We also integrate species missing from the megatree.
 
-## Packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+# About This Script
+
+Now we will start the most complex portion of the analysis. Here we elaborate the phylogenetic tree based on ftolr package megatree. But it is not only one phylogenetic tree (i.e., hypothesis), our tree must integrate missing species of ftolr megatree. In other words, here we will create our 1,000 phylogenetic scenarios.
+
+> ![WARNING] 
+> The creation of the phylogenetic scenarios demands a lot of memory and takes a minute to end. Therefore, clear garbage accumulated with `gc()`, the environment and restart the session. You may not be able to run this script if you have less than 8 GB of RAM. Maybe you can, but the next step will become harder and harder.
+
+# Packages
+
+As usual, multiple packages are required to do run this script, most of them are available on CRAN. The main package needed here is ftolr available at Github, see below.
+
 ```{r}
 # devtools::install_github("fernphy/ftolr", force=T) # Install if needed
 library(ftolr)         # Main package for fern phylogeny
@@ -17,18 +42,21 @@ library(readxl)        # Reading Excel files
 library(reshape2)      # Reshaping data (used for dcast)
 library(caper)         # Comparative analysis (not directly used here)
 library(tidyverse)     # Data manipulation and piping (%>%)
+library(here)            # To establish the path context
 
 rm(list = ls())        # Clear the environment
 set.seed(811)          # Set seed for reproducibility
-options(scipen = 99999) # Avoid scientific notation in outputs
+options(scipen = 999) # Avoid scientific notation in outputs
 N = 1000               # Number of trees to be generated
 ```
 
-## Load data
+# Load data
+
+In this step we only need the community matrix to extract species names.
 
 ```{r}
 # Reading site-by-species matrix from Excel
-d <- read_xlsx("data/data_ferns.xlsx", sheet = "w_matrix")
+d <- read_xlsx(here("data/data_ferns.xlsx"), sheet = "w_matrix")
 
 # Transforming into a site x taxa abundance matrix
 comm <- reshape2::dcast(
@@ -43,14 +71,13 @@ dim(comm)              # Dimensions of the community matrix
 comm[1:5, 1:5]         # Preview first few rows and columns
 ```
 
-## Loading Megatree
-Comparison of phylo tree and my community, we:
-1) Create a species vector;
-2) Compare w_matrix with tree tips;
+# Loading Megatree
 
-We will change the names of Dennstaedtia to Mucura since the tree was not been updated to include the genus. 
+Comparison of phylo tree and my community, we: 1) Create a species vector; 2) Compare w_matrix with tree tips;
 
-17 species in data but not tree.
+We will change the names of *Dennstaedtia* to *Mucura* since the tree has not been updated to include the genus.
+
+13 species in data but not tree.
 
 ```{r}
 # Load the ultrametric tree, rooted, and dropping outgroups
@@ -75,13 +102,15 @@ data_not_tree <- comparison$data_not_tree
 data_not_tree
 length(data_not_tree)
 ```
-### Saving data 
+
+# Saving data
+
+Finally we will export the list of unmatched species to Excel.
 
 ```{r}
-# Export the list of unmatched species to Excel for documentation
 write.xlsx(
   x = data_not_tree,
-  file = "outputs/included_spp.xlsx",
+  file = here("outputs/included_spp.xlsx"),
   keepNA = TRUE,
   rowNames = TRUE
 )
@@ -90,8 +119,9 @@ write.xlsx(
 
 # Finding species on tip labels
 
+For consistency we will check if specific genera are present in the tree.
+
 ```{r}
-# Check if specific genera are present in the tree
 phylo_new$tip.label[grepl("Diplazium_h", phylo_new$tip.label)]
 phylo_new$tip.label[grepl("Goniopteris_p", phylo_new$tip.label)]
 phylo_new$tip.label[grepl("Goniopteris_r", phylo_new$tip.label)]
@@ -103,9 +133,9 @@ phylo_new$tip.label[grepl("Megalastrum", phylo_new$tip.label)]
 phylo_new$tip.label[grepl("Mucura", phylo_new$tip.label)]
 ```
 
+# Creating 1000 phylo tree
 
-# Creating 1000 phylo tree 
-Here we use Nitta et al (2022) megatree and add species from my community absents in the their tree.
+Now the most memory consuming portion of the script, where we will use ftolr [(Nitta et al. 2022)](https://doi.org/10.3389/fpls.2022.909768) megatree and add my species absents in the tree.
 
 ```{r}
 # Initialize a list of N copies of the base tree
@@ -149,7 +179,9 @@ my.trees[[2]]
 my.trees[[100]]
 ```
 
-#1000 phylogenetic trees with just my species
+# 1000 phylogenetic trees with just my species
+
+We now will elaborate the tree with only the species present in my community matrix.
 
 ```{r}
 # Use keep.tip to keep only the species in `sp`
@@ -163,11 +195,14 @@ plot(ntrees[[124]])
 plot(ntrees[[435]])
 plot(ntrees[[1000]])
 ```
+
 # Saving trees
 
+Save all 1000 trees as a .txt file in Newick format
+
 ```{r}
-# Save all 1000 trees as a .txt file in Newick format
+
 mytrees <- ntrees
 class(ntrees) <- "multiPhylo"
-write.tree(mytrees, "data/new_ftrees.txt")
+write.tree(mytrees, here("data/new_ftrees.txt"))
 ```

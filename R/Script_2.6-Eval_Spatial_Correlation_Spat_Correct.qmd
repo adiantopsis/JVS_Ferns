@@ -1,9 +1,44 @@
-# 2.5 Removing Spatial Correlation in Mods. w/ Raw Traits
- This script require ~3 GiB of RAM Memory
- Always run  in a clean r-session with an empty environment
+---
+title: "Removing Spatial Correlation in Mods. w/ Corrected Traits"
+subtitle: "Using Moran I and Moran Eigenvector Map with CWM Models"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+```
+# About this script 
+
+This script shows the workflow to evaluate spatial correlation in model residuals across the 1,000 phylogenetic scenarios. To do so we will use `spdep` and `SoDA` package, the latter was used to transform decimal degree coordinates into Cartesian. We followed the Appendix S2, sect. 4 of [Bauman et al., (2018)](https://doi.org/10.1002/ecy.2469) to measure Moran's I and correct spatial autocorrelation (if needed).
+
+**The output here is a supplement for Table 2 and Appendix S14 in the main text.**
+
+![Note]: To hurry up the process we will use this function:
+
+> ![WARNING] 
+> Run this script demands a lot of memory and takes a minute to end. Therefore, clear garbage accumulated with `gc()`, the environment and restart the session. You may not be able to run this script if you have less than 8 GB of RAM.
 
 # Packages, settings and functions
+
 ```{r}
+#| message: false
+#| warning: false
+#| echo: false
+
 rm(list = ls())         # Clear all objects from the environment
 gc()                    # Run garbage collection to free memory
 
@@ -64,32 +99,44 @@ options(scipen = 99997)
 N = 1000
 ```
 
-## Load data
+# Load data
+
+For this script we will need the CWM values computed before (`cwm_list.RDS`) alongside with environmental data, which we fortunately insert in the `cwm_values_raw.RDS`. 
 
 ```{r}
 
 all_df <- readRDS(file = 'data/cwm_values_raw.RDS') %>%
-  column_to_rownames('Site')  # Load community-weighted mean values
+  column_to_rownames('Site')  # Load original community-weighted mean values
 
 models <- readxl::read_xlsx(
-  "outputs/Corrected/mod_select_cwm.xlsx",
+  "outputs/mod_select_cwm.xlsx",
   sheet = "nice_mode_S"
 )  # Load selected models per trait
 
 cwm_list <- readRDS("data/cwm_list.RDS")  # Load list of CWM matrices per trait and iteration
 ```
 
-## Start parallel computing
+# Start parallel computing
+
 ```{r}
-no_cores <- detectCores() - 4  # Use all cores minus 4 (adjust to 5 for desktop)
+no_cores <- detectCores() - 6  # Use all cores minus 4 (adjust to 5 for desktop)
 registerDoParallel(cores = no_cores)
 cl <- makeCluster(no_cores, type = "FORK")  # Create parallel backend
 ```
 
-## Spatial correlation
-### Creating coord. distance matrix
+# Spatial correlation
+This procedure is very similar to that adopted in previous steps of this script list. The only difference, as before, it runs iteratively most steps, like the residuals extraction and Bauman et al., (2018) MEM selection. In summary we will:
+
+1) Create a distance matrix with our coordinates;
+2) Create a spatial weighted matrix (see Methods section);
+3) Extract each models residuals (iteratively for the n-phylogenetic scenarios);
+4) Run MEM selection with a custom function to hurry up the process;
+5) Extract the needed information (Moran I, p-values, MEM selected and others minor things...).
+
+## Creating coord. distance matrix
+
 ```{r}
-## Creating a cartesian coordinates df, which will permit Euclidean distance usage
+## Creating a Cartesian coordinates df, which will permit Euclidean distance usage
 df_xy <- SoDA::geoXY(
   latitude = all_df$Lat,
   longitude = all_df$Long,
@@ -98,7 +145,7 @@ df_xy <- SoDA::geoXY(
 dist <- dist(df_xy) # Compute Euclidean distances
 ```
 
-### Spatial Weighted Matrix
+# Spatial Weighted Matrix
 
 ```{r}
 nb <- chooseCN(coordinates(df_xy), type = 4, plot.nb = FALSE)  # Create neighborhood graph (MST)
@@ -109,12 +156,12 @@ fdist <- lapply(distnb, function(x) 1 - x / max(dist(df_xy)))  # Convert distanc
 lw <- nb2listw(nb, style = 'B', glist = fdist, zero.policy = TRUE)
 ```
 
-### Creating a connectivity matrix based in Bauman (2018) proceed
+# Creating a connectivity matrix based in Bauman (2018) proceed
 
 ```{r}
 models$models
-# Rhyzome diameter
-models[grep("diam", models$models), ]$models
+# Rhizome diameter
+models[grep("Diam", models$models), ]$models
 model <-
   foreach(i = 1:N) %dopar%
   # Create model iteratively for the 1000 phylo scenarios
@@ -129,7 +176,7 @@ res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
 # Mesure Moran I and p-values
 mem <- foreach(i = 1:N) %dopar%
   {
-    test_mem(res[[i]], lw, nmodel = 'diam~N')
+    test_mem(res[[i]], lw, nmodel = 'Rhizome diam. ~N')
   } %>%
   list_rbind()
 
@@ -140,10 +187,10 @@ sac_diam <- get_df(mem)
 models$models
 model <-
   foreach(i = 1:N) %dopar%
-  lm(cwm_list$r_comp[[i]] ~ cec + plot_size + samp_size, data = all_df)
+  lm(cwm_list$r_comp[[i]] ~ nitrogen + plot_size + samp_size, data = all_df)
 
 mem <- foreach(i = 1:N) %dopar% {
-    test_mem(res[[i]], lw, nmodel = 'Rhiz. Comp~CEC')
+    test_mem(res[[i]], lw, nmodel = 'Rhiz. Comp~N')
   } %>%
   list_rbind()
 
@@ -174,7 +221,7 @@ res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
 
 mem <- foreach(i = 1:N) %dopar%
   {
-    test_mem(res[[i]], lw, nmodel = 'lmseg~AP')
+    test_mem(res[[i]], lw, nmodel = 'Multipinnate~AP')
   } %>%
   list_rbind()
 
@@ -190,53 +237,48 @@ res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
 
 mem <- foreach(i = 1:N) %dopar%
   {
-    test_mem(res[[i]], lw, nmodel = 'buds~AP')
+    test_mem(res[[i]], lw, nmodel = 'Buds~AP')
   } %>%
   list_rbind()
 
 sac_buds <- get_df(mem)
 
-# Frond Dimorphism
+# Spore Chlorophyll
+models[grep("Chl", models$models), ]$models
 
-models[grep("lmorf", models$models), ]$models
 model <- foreach(i = 1:N) %dopar%
-  lm(cwm_list$lmorf[[i]] ~ ann_prec + plot_size + samp_size, data = all_df)
+  lm(cwm_list$chl[[i]] ~ prec_seas + plot_size + samp_size, data = all_df)
 
 res <- foreach(i = 1:N) %dopar% residuals(model[[i]])
 
 mem <- foreach(i = 1:N) %dopar%
   {
-    test_mem(res[[i]], lw, nmodel = 'lmorf~AP')
-  }
-
-mem_result <- foreach(i = 1:N) %dopar%
-  {
-    mem[[i]]$sac
+    test_mem(res[[i]], lw, nmodel = 'Chlorophyll ~ PS')
   } %>%
   list_rbind()
 
-sac_lmorf <- get_df(mem_result)
+sac_chl <- get_df(mem)
 
-mem_morf <- foreach(i = 1:N) %dopar% mem[[i]]$selected.MEM
+# mem_morf <- foreach(i = 1:N) %dopar% mem[[i]]$selected.MEM
+# 
+# lapply(mem_morf, ncol) > 1
+# 
+# Iresid <- foreach(i = 1:N) %dopar%
+#   {
+#     df <- mem[[i]]$summary
+#     df[which.max(df$pvalue), ]
+#   } %>%
+#   list_rbind()
+# 
+# df_resid <- data.frame(
+#   model = Iresid[1, 1],
+#   mean = t(apply(Iresid[, -1], MARGIN = 2, mean)),
+#   sd = t(apply(Iresid[, -1], MARGIN = 2, sd))
+# )
+# sd()
 
-lapply(mem_morf, ncol) > 1
-
-Iresid <- foreach(i = 1:N) %dopar%
-  {
-    df <- mem[[i]]$summary
-    df[which.max(df$pvalue), ]
-  } %>%
-  list_rbind()
-
-df_resid <- data.frame(
-  model = Iresid[1, 1],
-  mean = t(apply(Iresid[, -1], MARGIN = 2, mean)),
-  sd = t(apply(Iresid[, -1], MARGIN = 2, sd))
-)
-sd()
-
-# Save
-openxlsx::write.xlsx(list(Iresid, df_resid), "outputs/Corrected/summ_residual_I_tcor.xlsx")
+# # Save
+# openxlsx::write.xlsx(list(Iresid, df_resid), "outputs/Corrected/summ_residual_I_tcor.xlsx")
 
 # Spore Chlorophyll
 
@@ -255,16 +297,20 @@ mem <- foreach(i = 1:N) %dopar%
 sac_chl <- get_df(mem)
 ```
 
-## Stop parallel computing ####
+# Stop parallel computing
+
 ```{r}
 stopCluster(cl)
 ```
-## Saving data
+
+# Saving data
+
+This data will supplement the Table 2 and Appendix S14.
 
 ```{r}
 # Combine all in a matrix
 cor_df <-
-  rbind(sac_diam, sac_rcr, sac_rcomp, sac_lmseg, sac_buds, sac_lmorf, sac_chl)
+  rbind(sac_diam, sac_rcr, sac_rcomp, sac_lmseg, sac_buds,  sac_chl)
 
 
 cor_df$data <- paste0(cor_df$I,"(", cor_df$Pvalue,")") 
@@ -273,9 +319,9 @@ cor_df
 
 #Save data
 wb_s_correl <-openxlsx::write.xlsx(
-  file = "outputs/Corrected/models_sac_scomp.xlsx",
-  x = list(df = cor_df, resid_lmorf = Iresid)
+  file = "outputs/models_sac_scomp.xlsx",
+  x = list(df = cor_df)
 )
 
-saveRDS(mem_morf, file = "outputs/RDS/mem_scomp.RDS")
+# saveRDS(mem_morf, file = "outputs/RDS/mem_scomp.RDS")
 ```

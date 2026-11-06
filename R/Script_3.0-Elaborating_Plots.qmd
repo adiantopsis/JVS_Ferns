@@ -1,12 +1,47 @@
+---
+title: "Finally... THE PLOTS"
+subtitle: "We’ve worked hard to get here, so now let’s enjoy it"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
 
-# Final Plots
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+# About This Script
+
+This is the script of our plots, is not so simple as you may expect, but works. For raw trait we have plotted the relationship raw with the tendency line provided by `effects` package to remove the effect of sample characteristics. For corrected traits cwm and ses.mpd we also used `effects`, but we plot the phylogenetic scenario for CWM and SES where the adjusted R² was closest to the mean across all 1,000 evaluated phylogenetic hypotheses.
+
+As we have a lot of interactions model we also need the `interactions` packages. This is a limited package in terms of ricing, but with some adjusting we get there...
+
+# Packages, setup and data
+
+Here is the needed packages, setup and data...
+
+![NOTE]
+> ggtree and ggtreeExtra is provided by BiocManager, then you need to install it!
 
 ```{r}
 rm(list = ls()) # Clear all objects from the environment
 gc() # Run garbage collection to free memory
 
-# Load required libraries
-# .rs.restartR() ## Restart R session
+# if (!requireNamespace("BiocManager", quietly=TRUE))
+#     install.packages("BiocManager")
+# BiocManager::install("ggtreeExtra")
+# BiocManager::install("ggtree")
 
 # devtools::install_github("xiangpin/ggtreeExtra", force = T)
 library(SYNCSA)
@@ -22,16 +57,19 @@ library(ggtreeExtra)
 library(ggnewscale)
 library(ggstar)
 library(RColorBrewer)
-
+library(here)
 
 N = 1000 # number of elements (ie. trees or repetitions)
-mems <- readRDS("outputs/RDS/mem_chl_traw.RDS") #spatial variables
-cwm_values <- readRDS("data/cwm_values_raw.RDS") %>%
-  mutate(mems$selected.MEM)
+cwm_values <- readRDS(here("data/cwm_values_raw.RDS"))
+models <- read_xlsx(here("outputs/mod_select_cwm.xlsx"), sheet = "nice_mode_S")
 ```
-## Raw traits plot
+
+# Figure 4 - CWM
+## Raw traits
 ### Short Creeping Rhizome
+
 ```{r}
+models
 # Fit linear model for short creeping rhizome with environmental predictors
 model <- lm(data = cwm_values, r_cr ~ ann_prec + plot_size + samp_size)
 # Extract effect of annual precipitation
@@ -39,7 +77,7 @@ eff <- effects::effect("ann_prec", model) %>%
   data.frame()
 p1 <- ggplot(data = cwm_values, aes(x = ann_prec, y = r_cr)) +
   geom_point(# Scatter points
-    fill = "#823f23",
+    fill = "lightblue",
     colour = "black",
     size = 3,
     shape = 21,
@@ -60,16 +98,17 @@ p1 <- ggplot(data = cwm_values, aes(x = ann_prec, y = r_cr)) +
 
 p1
 ```
+
 ### Spore Chlorophyll
+
 ```{r}
 # Fit model with interaction between annual precipitation and precipitation seasonality
 model <- lm(
-  chl ~ ann_prec * prec_seas + plot_size + samp_size + MEM5 + MEM1,
+  chl ~ ann_prec * prec_seas + plot_size + samp_size,
   data = cwm_values
 )
 
-# Set colour palete
-cols <- rev(c("#003817", "coral"))
+
 # Create interaction plot using interact_plot
 p2 <- interactions::interact_plot(
   model,
@@ -81,14 +120,14 @@ p2 <- interactions::interact_plot(
   point.shape = T,
   point.size = 3,
   point.alpha = 1,
-  modx.value = 'terciles', 
+  # modx.value = 'terciles', 
   partial.residuals = T,
   colors = 'Paired',
   x.label = "Annual Rainfall (mm)",
   y.label = "Spore Chlorophyll (Raw)",
   legend.main = "Rain. Seas. (%CV)"
 )+ theme_minimal()+
-labs(caption = 'Meadian of terciles = 10.1%, 11.1%, 22.9%')+
+# labs(caption = 'Median of terciles = 10.1%, 11.1%, 22.9%')+
   theme_bw(base_family = "serif") +
   theme(axis.text = element_text(size = 6),
     axis.title = element_text(
@@ -113,71 +152,24 @@ p2
 
 p2
 
-
 ```
-### SES.MPD plot
-```{r}
 
-# Load model and data for SES.MFD (standardized effect size of mean pairwise distance)
-ses_mod <- readRDS("outputs/RDS/raw_ses_mod_ab.RDS")
-org_data <- readRDS("outputs/RDS/raw_ses_mod_data.RDS")
-ses_mpd_full <- readRDS("outputs/RDS/ses_mpd_full.RDS")
 
-# My palette, it works for colorblindness
-cols <- rev(c("#fcfcd4", "#8cdfff", "#003b55"))
-
-# Create interaction plot for SES.MFD vs. temp and seasonality
-p3 <- interactions::interact_plot(
-  ses_mod,
-  pred = max_temp_wam,
-  modx = prec_seas,
-  data = ses_mpd_full,
-  plot.points = T,
-  vary.lty = T,
-  point.shape = T,
-  point.size = 3,
-  modx.value = 'terciles', 
-  colors = 'red',
-  x.label = "Max. Temperature in Warmest Month (°C)",
-  line.thickness = .6,
-  y.label = "SES.MFD Traits (Raw)",
-  legend.main = "Rain. Seas. (%CV)"
-) +
-labs(caption = 'Meadian of terciles = 10.1%, 11.1%, 22.9%')+
-  theme_bw(base_family = "serif") +
-  theme(axis.text = element_text(size = 6),
-    axis.title = element_text(
-      colour = "black",
-      family = "serif",
-      size = 6.5,
-      face = "bold"
-    ),
-        legend.position = 'bottom',
-    panel.grid.major = element_line(linetype = 2, linewidth = .2),
-    panel.grid.minor = element_line(linetype = 2, linewidth = .2)
-  )
-# Interactions in complicated...
-# We need to overwrite some parameters inside the object
-# and insert others
-p3$layers[[2]]$aes_params$shape <- 21
-p3$layers[[2]]$mapping$colour <- aes(colour = prec_seas)$colour
-p3$layers[[2]]$mapping$fill <- aes(fill = prec_seas)$fill
-p3$layers[[2]]$aes_params$colour <- "black"
-p3
-```
 ## Corrected plots
+
 ### Short-Creeping Rhizome
+
 ```{r}
 # Load organized and corrected data
-org_all <- readRDS("data/org_data.RDS")
-scomp <- readRDS("outputs/RDS/SCOMP.RDS")
-models <- read_xlsx(
-  "outputs/Corrected/mod_select_cwm.xlsx",
+org_all <- readRDS(here("data/org_data.RDS"))
+scomp <- readRDS(here("outputs/RDS/SCOMP.RDS"))
+models <- read_xlsx(here(
+  "outputs/mod_select_cwm.xlsx"),
   sheet = "nice_mode_S"
 )[, -1]
-cwm_data <- read_xlsx("outputs/Corrected/cwm_sig_tcor.xlsx", sheet = "full_result")
+cwm_data <- read_xlsx(here("outputs/cwm_sig_tcor.xlsx"), sheet = "full_result")
 
-ses.mpd_data <- readRDS("outputs/RDS/ses.tcor_mdp_ab.RDS")
+ses.mpd_data <- readRDS(here("outputs/ses.tcor_mdp_ab.RDS"))
 
 # Organize community data for each simulation
 org_data <-
@@ -208,7 +200,7 @@ rrc_data <- cwm_data %>% filter(grepl("r_cr", model))
 # Select simulation with r2 closest to mean
 n <- filter(
   rrc_data,
-  near(mean(adj.r.squared), adj.r.squared, tol = .0000025)
+  near(mean(adj.r.squared), adj.r.squared, tol = .0000035)
 )$...1 %>%
   as.numeric()
 n
@@ -240,7 +232,7 @@ eff2 <- as.data.frame(effects::effect("PS", model))
 p4 <- ggplot(data = rc_p) +
   geom_point(aes(x = AP, y = t),
     col = "black",
-    fill = '#823a00',
+    fill = 'lightgreen',
     size = 3,
     shape = 22,
     alpha = 0.8
@@ -264,7 +256,7 @@ p4
 p5 <- ggplot(data = rc_p) +
   geom_point(aes(x = PS, y = t),
     col = "black",
-    fill = '#823a00',
+    fill = 'lightgreen',
     size = 3,
     shape = 22,
     alpha = 0.8
@@ -281,40 +273,120 @@ p5 <- ggplot(data = rc_p) +
     panel.grid.major = element_line(linetype = 2, linewidth = .2),
     panel.grid.minor = element_line(linetype = 2, linewidth = .2)
   ) +
-  labs(y = "Short-Creeping Rhizome CWM (Corrected)", x = "Rainfall Seasonallity (%CV)")
+  labs(y = "Short-Creeping Rhizome CWM (Corrected)", x = "Rainfall Seasonality (%CV)")
 
 p5
 
 ```
-### SES MPD 
+
+# Figure 3 - SES.MPD plot
+## Raw traits
+
 ```{r}
+
+# Load model and data for SES.MFD (standardized effect size of mean pairwise distance)
+ses_mod <- readRDS(here("outputs/RDS/raw_ses_mod_ab.RDS"))
+org_data <- readRDS(here("outputs/RDS/raw_ses_mod_data.RDS"))
+ses_mpd_full <- readRDS(here("outputs/RDS/ses_mpd_full.RDS"))
+
+# My palette, it works for colorblindness
+cols <- rev(c("lightblue", "blue", "#003b55"))
+
+# Create interaction plot for SES.MFD vs. temp and seasonality
+p3 <- interactions::interact_plot(
+  ses_mod,
+  pred = max_temp_wam,
+  modx = prec_seas,
+  data = ses_mpd_full,
+  plot.points = T,
+  vary.lty = T,
+  point.shape = T,
+  point.size = 3,
+  colors = cols,
+  line.thickness = .6,
+  y.label = "SES.MFD Traits (Raw)",
+  legend.main = "Rainfall Seas. (%CV)",
+  x.label = "Max. Temperature in Warmest Month (°C)"
+) +
+# labs(caption = 'Median of terciles (%CV) = 10.1, 11.1, 22.9')+
+  theme_bw(base_family = "serif") +
+  theme(axis.text = element_text(size = 6),
+    axis.title = element_text(
+      colour = "black",
+      family = "serif",
+      size = 6.5,
+      face = "bold"
+    ),      
+    legend.position = 'bottom',
+    legend.text = element_text(size = 7),
+    legend.title = element_text(size = 7),
+    panel.grid.major = element_line(linetype = 2, linewidth = .2),
+    panel.grid.minor = element_line(linetype = 2, linewidth = .2)
+  )+
+  scale_y_continuous(limits = c(-2.5, 2.5))
+# Interactions in complicated...
+# We need to overwrite some parameters inside the object
+# and insert others
+p3$layers[[2]]$aes_params$shape <- 21
+p3$layers[[2]]$mapping$colour <- aes(colour = prec_seas)$colour
+p3$layers[[2]]$mapping$fill <- aes(fill = prec_seas)$fill
+p3$layers[[2]]$aes_params$colour <- "black"
+p3
+
+```
+
+## Corrected traits
+
+```{r}
+
+org_data <-
+  foreach(i = 1:N) %dopar%
+  {
+    organize.syncsa(
+      org_all$community,
+        # Organized traits
+      traits = data.frame(
+        diam = scomp$riz_diam[[i]],
+        rcomp = scomp$riz_comp[[i]],
+        r_cr = scomp$riz_cr[[i]],
+        r_lr = scomp$riz_lr[[i]],
+        lmseg = scomp$lam_mseg[[i]],
+        buds = scomp$buds[[i]],
+        ltri = scomp$ltri[[i]],
+        chl = scomp$chl[[i]],
+        ind = scomp$ind[[i]],
+        lmorf = scomp$lmorf[[i]]
+      ),
+      envir = org_all$environmental
+    )
+  }
+
 # Load results and prepare SES MPD data
-result_ses.all <- readRDS("outputs/RDS/tcor-result_ses_ab.RDS")
-ses.mpd_all <- readRDS("outputs/RDS/ses.tcor_mdp_ab.RDS")
+result_ses.all <- readRDS(here("outputs/tcor-result_ses_ab.RDS"))
+ses.mpd_all <- readRDS(here("outputs/ses.tcor_mdp_ab.RDS"))
 
 # Add tree identifiers
 ses_data <- cbind.data.frame(result_ses.all[1:1000, ], tree = seq(1, 1000, 1))
 
 # Select best scenario
-n_ses <- dplyr::filter(ses_data, near(mean(ses_data$adj.r.squared), adj.r.squared, tol = .000018))$tree %>% as.numeric()
+n_ses <- dplyr::filter(ses_data, near(mean(ses_data$adj.r.squared), adj.r.squared, tol = .000028))$tree %>% as.numeric()
 
 # Combine data for model
 df <- cbind.data.frame(
   ses = ses.mpd_all[[n_ses]]$mpd.obs.z,
   mt = org_data[[n_ses]]$environmental$max_temp_wam,
-  ps = org_data[[n_ses]]$environmental$prec_seas,
+  pw = org_data[[n_ses]]$environmental$prec_warm,
   p = org_data[[n_ses]]$environmental$plot_size,
   s = org_data[[n_ses]]$environmental$samp_size
 )
 # Fit model
-mod <- lm(ses ~ mt * ps + p + s, data = df)
+mod <- lm(ses ~ mt * pw + p + s, data = df)
 # Plot interaction
 p6 <- interactions::interact_plot(
   mod,
   pred = mt,
-  modx = ps,
+  modx = pw,
   data = df,
-  modx.value = 'terciles',
   plot.points = T,
   jitter = .01,
   partial.residuals = F,
@@ -322,13 +394,14 @@ p6 <- interactions::interact_plot(
   point.shape = T,
   point.size = 3,
   se = F,
-  colors = "red",
+  colors = "Greens",
   point.alpha = 1,
-  x.label = "Max. Temperature in Warmest Month (°C)",
   line.thickness = .6,
   y.label = "SES.MFD Traits (Corrected)",
-  legend.main = "Rain. Seas. (%CV)"
+   legend.main = "Rainfall W. Q. (mm)",
+  x.label = "Max. Temperature in Warmest Month (°C)"
 ) +
+# labs(caption = 'Median of terciles (°C) = 20.4, 23.3, 24 mm')+
   theme_bw(base_family = "serif") +
   theme(axis.text = element_text(size = 6),
     axis.title = element_text(
@@ -338,29 +411,38 @@ p6 <- interactions::interact_plot(
       face = "bold"
     ),
         legend.position = 'bottom',
+    legend.text = element_text(size = 7),
+        legend.title = element_text(size = 7),
     panel.grid.major = element_line(linetype = 2, linewidth = .2),
     panel.grid.minor = element_line(linetype = 2, linewidth = .2)
-  )
+  )+
+  scale_y_continuous(limits = c(-2.5, 2.5))
 
 # Modify layers for consistency
 p6$layers[[2]]$aes_params$shape <- 22
-p6$layers[[2]]$mapping$colour <- aes(colour = ps)$colour
-p6$layers[[2]]$mapping$fill <- aes(fill = ps)$fill
+p6$layers[[2]]$mapping$colour <- aes(colour = pw)$colour
+p6$layers[[2]]$mapping$fill <- aes(fill = pw)$fill
 p6$layers[[2]]$aes_params$colour <- "black"
 p6
 
 
 ```
-### Final Plot
+
+# Final Plots
+
+Here we will build the panels of each figure with `patchworks` package.
+
 ```{r}
 
 (p3 + p6) +
   plot_annotation(tag_levels = "A", tag_suffix = ")")+
   plot_layout(guides = "collect") &
-  theme(legend.position= 'bottom')
+  theme(legend.position= 'bottom', 
+  legend.text = element_text(size = 7),
+  legend.title = element_text(size = 7.5))
 
 ggsave(
-  "figs/SES_MPD.tiff",
+  here("figs/SES_MPD_2.tiff"),
   width = 180,
   height = 100,
   units = "mm",
@@ -374,7 +456,7 @@ ggsave(
   theme(legend.position= 'bottom')
 
 ggsave(
-  "figs/CWM.tiff",
+  here("figs/CWM_2.tiff"),
   width = 180,
   height = 160,
   units = "mm",
@@ -382,21 +464,24 @@ ggsave(
   bg = "white"
 )
 ```
-## Plot Phylogenetic Tree
+
+# Figure 2 - Plot Phylogenetic Tree
+
+Now we will build the figure 2, which was a bit challenging... We will use `ggtree`, `ggtreeExtra`.
+Even so, we only build the basic layout here, we finalized it in Inkscape...
 
 ```{r}
-library(ggstar)  # Load the ggstar package for enhanced plotting features in ggtree
 
 # Load taxonomic data and replace underscores with spaces in species names
 tax <- ftolr::ftol_taxonomy  
 tax$species <- gsub("_", " ", tax$species)
 
 # Read the phylogenetic tree and clean tip labels (replace "_" with space)
-tree <- read.tree("data/new_ftrees.txt")[[1]]  
+tree <- read.tree(here("data/new_ftrees.txt"))[[1]]  
 tree$tip.label <- gsub("_", " ", tree$tip.label)  
 
 # Load the dataset containing community and trait data
-org_data <- readRDS("data/org_data.RDS")  
+org_data <- readRDS(here("data/org_data.RDS"))
 
 # Clean up the trait and community matrix labels to match tree tips
 rownames(org_data$traits) <- gsub("_", " ", rownames(org_data$traits))  
@@ -472,9 +557,9 @@ p +
       "Laminae Dimorphism",
       "Multipinnate Laminae",
       "Pubescent Laminae",
-      "Compact Rhyzome",
-      "Short Creeping Rhyzome",
-      "Long Creeping Rhyzome"
+      "Compact Rhizome",
+      "Short-Creeping Rhizome",
+      "Long-Creeping Rhizome"
     ),
     values = col2,
     na.translate = TRUE,
@@ -535,8 +620,8 @@ p +
   )
 
 ggsave(
-  "figs/heatphylo_rect.jpg",
-  device = "jpg",
+here("figs/heatphylo_rect1.svg"),
+  device = "svg",
   dpi = 600,
   scale = 1.5,
   width = 180,
@@ -545,82 +630,3 @@ ggsave(
 )
 ```
 
-# No used - Graph of phylogenetic signal
-```{r}
-sig <- map_df(D_list, ~ as.data.frame(.))
-sig$trait <- c(
-  rep('RComp', 1000),
-  rep("RSC", 1000),
-  rep("RLC", 1000),
-  rep("LMSeg", 1000),
-  rep("LDim", 1000),
-  rep("LPub", 1000),
-  rep("Buds", 1000),
-  rep("Ind", 1000),
-  rep("Chl", 1000),
-  rep("RDiam", 1000)
-)
-
-D <- sig %>%
-  group_by(trait) %>%
-  summarise(
-    mean_D = mean(D),
-    max_D = max(D),
-    min_D = min(D),
-    sd_D = sd(D),
-    .groups = 'drop'
-  ) %>%
-  filter(!(trait == "RDiam" | trait == "LINT"))
-
-K <- sig %>%
-  group_by(trait) %>%
-  summarise(
-    mean_D = mean(K),
-    max_D = max(K),
-    min_D = min(K),
-    sd_D = sd(K),
-    .groups = 'drop'
-  ) %>%
-  na.omit()
-df <- rbind(K, D) %>% mutate(Method = c(rep("K", 1), rep("D", 9)))
-```
-
-```{r}
-ggplot(df, aes(x = trait, y = mean_D)) +
-  geom_pointrange(
-    aes(
-      ymin = mean_D + 2 * sd_D,
-      ymax = mean_D - 2 * sd_D,
-      color = Method,
-      fill = Method
-    ),
-    size = 1,
-    shape = 22
-  ) +
-  # geom_text_repel(aes(label = sites),  color = "black", size = 2)+
-  labs(y = "Signal Value", x = "Traits") +
-  theme_bw() +
-  theme(
-    axis.text = element_text(color = "black"),
-    axis.title = element_text(face = "bold"),
-    panel.grid = element_line(linetype = 2),
-    panel.grid.minor = element_blank()
-  ) +
-  scale_color_manual(values = c("black", "gray")) +
-  scale_fill_manual(values = c("black", "gray")) +
-  coord_flip() +
-  geom_hline(aes(yintercept = 0), lty = 2, col = "black") +
-  scale_y_continuous(limits = c(-1.5, 1.5), n.breaks = 10) +
-  labs(
-    caption = 'Pointrange corresponds to 2 standard deviations from the mean'
-  )
-
-ggsave(
-  "figs/sig-trait.tiff",
-  width = 180,
-  height = 150,
-  units = "mm",
-  dpi = 300,
-  bg = "white"
-)
-```

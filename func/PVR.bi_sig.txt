@@ -1,0 +1,45 @@
+#####################################################################
+#### Function to Remove Phylo Sig in Binomial Traits via PVR ########
+
+##* eig = a Phylogenetic distances matrix decomposed
+##* t = a binomial trait (ie. 0 or 1) vector with species names 
+
+PVR.bi_sig<- function(dectree, trait){ 
+  
+PVR_res <-  PVR(x = dectree,   #eigenvector selection
+              trait = trait, method = "moran")
+
+  
+#### GLMS ######
+glm_pvr <- glm(trait ~ PVR_res@Selection$Vectors, family = "binomial")
+  
+S<- Residuals(glm_pvr, type = "standard.pearson")
+
+pR2_T<-rsq::rsq.n(glm_pvr)
+
+S_glm<-glm(S ~ PVR_res@Selection$Vectors)
+
+pR2_S<-rsq::rsq.n(S_glm)
+
+names(S)<-names(trait)
+
+PVR_R2<-PVR_res@PVR$R2 #keep r2 (intensity of signal in PVR)
+
+x<-list(corrected_trait = S,
+        phylo.sig.results=cbind.data.frame(R2_Original=PVR_R2,
+                                     Sig.T_comp=pR2_T,  Sig.S_comp=pR2_S))
+return(x)
+}
+
+TABLE_MEAN<-function(x,y){
+  PVR_R2<-capture.output(cat(round(mean(x$R2_Original),2),
+                             "[", round(range(x$R2_Original),2), "]"))
+  T_comp_pR2<-capture.output(cat(round(mean(x$Sig.T_comp), 2),
+                                 "[", round(range(x$Sig.T_comp),2),"]"))
+  S_comp_pR2<-capture.output(cat(round(mean(x$Sig.S_comp),4),
+                                 "[", round(range(x$Sig.S_comp),4), "]"))
+  vec<-rbind.data.frame(PVR_R2, T_comp_pR2, S_comp_pR2)
+  colnames(vec)<-y
+  rownames(vec)<-c("R2_Original", "Sig.T_comp", "Sig.S_comp")
+  return(vec)
+}

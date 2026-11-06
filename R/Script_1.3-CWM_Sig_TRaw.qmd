@@ -1,100 +1,81 @@
 ---
-lang: en-US
+title: "Implementing the CWM.sig into Selected Model (RAW Traits)"
+subtitle: "Evaluating Trait-Environment Relationship"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
 ---
 
-# 6.1 CWM SIG 
-This section tests trait-environment relationships using a Community Weighted Mean significance test (CWM.Sig) based on permutations. Two permutational approach is considered here:
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
 
-- taxa.shuffle;
+# About This Script
 
-- trait.shuffle.
+In this section, we will evaluate the trait-environment using a Community Weighted Mean significance test (CWM.sig) based on permutations. Two permutational approach are considered here:
+
+- site.shuffle: performs permutations of CWM values across sites to evaluate the relationship between CWM and environmental variables using an ordinary least squares (OLS) regression;
+
+- trait.shuffle: permutes species trait values within the species pool, recalculates null CWM values, and links them to environmental gradients via OLS.
+
+We have used 9,999 permutations in this process.
+
+The output of this script will be a supplement for Table 1 and Appendix S11.
+
+# Packages 
+
+The packages required to this section are bellow, most of
+them are available on CRAN. The CWM.sig function is available in [Duarte et al. (2018)](https://doi.org/10.1002/ecy.2081).
+
 
 ```{r}
 rm(list = ls()) ## Clear the R environment to ensure a clean workspace
+gc()
 
+library(here)            # To establish the path context
 library(SYNCSA)          # For ecological analysis, includes CWM and null models
 library(openxlsx)        # Reading/writing Excel files
-source("func/cwm_sig.txt")         # Custom function for CWM significance testing
-source("func/summarize_trees.R")   # Custom script, possibly for summarizing phylogenetic trees
+source(here("func/cwm_sig.txt"))         # Custom function for CWM significance testing
+source(here("func/summarize_trees.R"))   # Custom script, possibly for summarizing phylogenetic trees
 library(tidyverse)       # For data manipulation and visualization
 library(readxl)          # Reading Excel files
 
+
 runs = 9999              # Number of permutations for the null model
 options(scipen = 9999)   # Avoid scientific notation in outputs
-
 ```
 
-## Load data 
+# Load data 
+
+We will push into this script the organized data produced in the step *1.2-Eval_Spatial_Correlation_TRAW.qmd*.
 
 ```{r}
-# Community data (species abundance per site)
-d <- read_xlsx("data/data_ferns.xlsx", sheet = "w_matrix")
+org_data <- readRDS(file = here("data/org_data.RDS"))    
 
-# Create community matrix (sites x taxa), aggregating species counts
-w_matrix <- reshape2::acast(
-  site ~ taxa,
-  data = d,
-  value.var = "FA_New",
-  fun.aggregate = sum
-) %>%
-  round(digits = 2) # Round to two decimal places
-
-# Environmental data
-e_matrix <- read_xlsx("data/data_ferns.xlsx", sheet = "e_matrix") %>%
-  dplyr::filter(Site %in% rownames(w_matrix)) %>%       # Match only relevant sites
-  column_to_rownames('Site')                         # Set site names as rownames
- 
-
-# Trait data
-t_matrix <- read_xlsx("data/data_ferns.xlsx", sheet = "t_matrix")
-head(t_matrix)
-
-# Binarization of categorical variables
-rhiz_type <- table(t_matrix$taxa, t_matrix$rhizome_type)         # Rhizome type as binary table
-morph <- table(t_matrix$taxa, t_matrix$frond_morphology)         # Frond morphology as binary table
-
-# Check alignment of taxa for trait matrix construction
-t_matrix[match(rownames(rhiz_type), t_matrix$taxa), ]
-t_matrix$laminae_pubescence
-
-# Create trait matrix (species x traits) with continuous and binarized traits
-t <-
-  cbind.data.frame(
-    diam = t_matrix[order(t_matrix$taxa), ]$rhizome_diameter,
-    r_comp = rhiz_type[order(rownames(rhiz_type)), "Compact"],
-    r_cr = rhiz_type[order(rownames(rhiz_type)), "Short-Creeping"],
-    r_lr = rhiz_type[order(rownames(rhiz_type)), "Long-Creeping"],
-    lmseg = t_matrix[order(order(t_matrix$taxa)), ]$laminae_dissection,
-    ltri = t_matrix[order(t_matrix$taxa), ]$laminae_pubescence,
-    buds = t_matrix[order(t_matrix$taxa), ]$proliferous_buds,
-    ind = t_matrix[order(t_matrix$taxa), ]$indusium,
-    ldim = morph[order(rownames(morph)), 'Dimorphic'],
-    chl = t_matrix[order(order(t_matrix$taxa)), ]$spore_chlorophyll
-  ) %>%
-  filter(rownames(.) %in% colnames(w_matrix)) # Filter to include only species present in w_matrix
-
-dim(t)
-head(t)
-glimpse(t)
 ```
-### Load models
+
+# Load models
+We will also load the models and intermediary steps to verify if we are reproducing the models correctly. 
 
 ```{r}
-nice_mods <- read.xlsx('outputs/cwm_raw_results.xlsx', sheet = 3) # List of relevant models
-cwm_values <- readRDS("data/cwm_values_raw.RDS")                  # Raw CWM values
-```
-### Organizing data 
-
-```{r}
-org_data <- organize.syncsa(w_matrix, traits = t, envir = e_matrix) # Format data for analysis
-saveRDS(file = "data/org_data.RDS", org_data)                       # Save for reproducibility
-
-mem <- readRDS(file = 'outputs/RDS/mem_chl_traw.RDS')              # Load MEM variables for spatial structure
+nice_mods <- read.xlsx(here('outputs/cwm_raw_results.xlsx'), sheet = 3) # List of relevant models
+cwm_values <- readRDS(here("data/cwm_values_raw.RDS"))                  # Raw CWM values
 ```
 
-## CWM SIG Testing
+# CWM SIG Testing
 
-Each model tests a trait against environmental predictors using permutation-based null models.
+Now we will test each trait against environmental predictors using the permutation-based null models.
 
 ```{r}
 nice_mods
@@ -108,12 +89,11 @@ rdiam <- get_cwm(
   model = T
 )
 
-
 rcomp <- get_cwm(
   org_data$community,
   trait = org_data$traits,
   env = org_data$environmental,
-  formula = r_comp ~ nitrogen + samp_size + plot_size,
+  formula = r_comp ~ nitrogen + cec + samp_size + plot_size,
   runs = runs
 )
 
@@ -125,27 +105,11 @@ screep <- get_cwm(
   runs = runs
 )
 
-buds <- get_cwm(
+lcreep <- get_cwm(
   org_data$community,
   trait = org_data$traits,
   env = org_data$environmental,
-  formula = buds ~ ann_prec + plot_size + samp_size,
-  runs = runs
-)
-
-ind <- get_cwm(
-  org_data$community,
-  trait = org_data$traits,
-  env = org_data$environmental,
-  formula = ind ~ ann_prec + plot_size + samp_size,
-  runs = runs
-)
-
-dim <- get_cwm(
-  org_data$community,
-  trait = org_data$traits,
-  env = org_data$environmental,
-  formula = ldim ~ ann_prec + prec_seas + plot_size + samp_size,
+  formula = r_lr ~ cec + plot_size + samp_size,
   runs = runs
 )
 
@@ -157,6 +121,22 @@ lmseg <- get_cwm(
   runs = runs
 )
 
+ind <- get_cwm(
+  org_data$community,
+  trait = org_data$traits,
+  env = org_data$environmental,
+  formula = ind ~ prec_warm + plot_size + samp_size,
+  runs = runs
+)
+
+dim <- get_cwm(
+  org_data$community,
+  trait = org_data$traits,
+  env = org_data$environmental,
+  formula = ldim ~ prec_seas + plot_size + samp_size,
+  runs = runs
+)
+
 spore <- get_cwm(
   org_data$community,
   trait = org_data$traits,
@@ -164,8 +144,6 @@ spore <- get_cwm(
   formula = chl ~
     ann_prec *
       prec_seas +
-      mem$selected.MEM$MEM5 +
-      mem$selected.MEM$MEM1 +
       plot_size +
       samp_size,
   runs = runs
@@ -174,13 +152,14 @@ spore <- get_cwm(
 
 ## Output data 
 
+Here we will combine all CWM significance results into a single data frame. This dataframe will be supplement for Table 1 and Appendix S11.
+
 ```{r}
-# Combine all CWM significance results into a single data frame
 cwm.results <-
   full_join(rcomp$cwm.sig, screep$cwm.sig) %>%
+  full_join(lcreep$cwm.sig) %>%
   full_join(rdiam$cwm.sig) %>%
   full_join(lmseg$cwm.sig) %>%
-  full_join(buds$cwm.sig) %>%
   full_join(ind$cwm.sig) %>%
   full_join(dim$cwm.sig) %>%
   full_join(spore$cwm.sig)
@@ -194,7 +173,6 @@ p <- cbind(
   rcomp$model$data,
   screep$model$data,
   lmseg$model$data,
-  buds$model$data,
   ind$model$data,
   dim$model$data,
   spore$model$data
@@ -204,20 +182,27 @@ p <- cbind(
 df <- p[!duplicated(as.list(p))]
 
 # Example correlation between two traits
-cor(df$r_cr, df$lmseg)
+cor_cwm <- Hmisc::rcorr(as.matrix(df[,c(1, 12:18)]))
+corrplot::corrplot(cor_cwm$r,
+         type = "upper",
+         p.mat = cor_cwm$P,
+         sig.level = 0.05,
+         method = 'number',
+         insig = "blank")  
+str(df)
 
 ```
-### Save data
+
+## Save data
 
 ```{r}
 write.xlsx(
   x = list(results = cwm.results, plots = df),     # Save both results and model data
-  "outputs/cwm_sig_traw.xlsx",                     # Output path
+here("outputs/cwm_sig_traw.xlsx"),                     # Output path
   startRow = 1,
   startCol = 1,
   keepNA = T,                                       # Keep missing values
   rowNames = T                                      # Include row names
 )
 ```
-
 

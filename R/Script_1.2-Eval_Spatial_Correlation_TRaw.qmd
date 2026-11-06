@@ -1,8 +1,33 @@
-# 5.1. Removing Spatial Correlation in Mods. w/ Raw Traits 
-Here we will test spatial correlation at model residuals. To do so we will use spdep and SoDA package, the latter was used to transform decimal degree coordinates into cartesian. We followed the Appendix S2, sect. 4 of Bauman et al., (2018) to mensure Moran's I and correct spatial autocorrelation (if needed).
+---
+title: "Detecting and Removing Spatial Correlation in Mods (Raw Traits)"
+subtitle: "Moran I and Moran's Eigenvector Maps"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
 
-# Function 
-This is a function to hurry up de analytical proceed.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+# About This Script
+This script shows the pipeline to test spatial correlation in model residuals. To do so we will use spdep and SoDA package, the latter was used to transform decimal degree coordinates into Cartesian. We followed the Appendix S2, sect. 4 of [Bauman et al., (2018)](https://doi.org/10.1002/ecy.2469) to measure Moran's I and correct spatial autocorrelation (if needed).
+
+**The output here is a supplement for Table 1 and Appendix S11.**
+
+![Note]: To hurry up the process we will use this function:
+
 ```{r}
 test_mem <- function(res, lw, nmodel = NULL) {
   # Select Moran’s Eigenvector Maps (MEMs) that explain spatial autocorrelation in model residuals
@@ -31,20 +56,24 @@ test_mem <- function(res, lw, nmodel = NULL) {
   }
 }
 ```
+
 # Packages
+
 ```{r}
-# devtools::install_github("cran/SoDA") #install SoDA to deal with coords
-library(sp)
-require(spdep)
-library(sf)
-library(adespatial)
-library(SoDA)
-library(readxl)
-library(tidyverse)
-library(openxlsx)
+# Additional libraries for spatial analysis
+# devtools::install_github("cran/SoDA") # install SoDA to deal with coordinates
+library(sp)         # Classes and methods for spatial data
+require(spdep)      # Spatial dependence: weighting schemes, statistics
+library(sf)          # Simple features for spatial vector data
+library(adespatial)  # Multivariate multiscale spatial analysis
+library(SoDA)        # Functions for geographical and spatial coordinate conversion
+library(readxl)       # Read Excel files
+library(tidyverse)    # Data manipulation and visualization
+library(openxlsx)     # Export results to Excel
 ```
+
 # Load data
-Transforming coords from latlong to UTM to enable usage of Euclidean distance.
+Transforming coords from latitude/longitude to metric coordinates (UTM equivalent in km) to enable usage of Euclidean distance.
 
 ```{r}
 # Read coordinates and prepare environmental + community-weighted mean (CWM) trait data
@@ -59,8 +88,10 @@ nice_mods <- read_xlsx('outputs/cwm_raw_results.xlsx', sheet = 3)
 ```
 
 # Creating a cartesian coordinates df
+
+Combine coordinates and traits into one data frame. Then we will use the coordinates to construct a distance matrix.
+
 ```{r}
-# Combine coordinates and traits into one data frame
 all_df <- coords %>%
   `colnames<-`(c("long", "lat")) %>%
   cbind.data.frame(cwm_values, x_ncor)
@@ -75,6 +106,7 @@ dist <- dist(df_xy)  # Euclidean distance between sites
 ```
  
 # Spatial weighted matrix 
+
 ```{r}
 # Build a neighborhood structure 
 nb <- chooseCN(coordinates(df_xy), type = 4, plot.nb = FALSE)
@@ -94,8 +126,8 @@ lw <- nb2listw(nb, style = 'B', glist = fdist, zero.policy = TRUE)
 Each block below fits a linear model with raw traits ~ environmental predictors. Then it extracts residuals and tests them for spatial autocorrelation using test_mem().
 
 ```{r}
+nice_mods
 # nice_mods
-
 sac_diam <- lm(
   diam ~ ann_prec * prec_seas + plot_size + samp_size,
   data = all_df
@@ -104,11 +136,22 @@ sac_diam <- lm(
   test_mem(., lw, nmodel = 'Rhizome diameter ~ AR * RS')
 
 sac_rcomp <- lm(
-  r_comp ~ nitrogen + plot_size + samp_size,
+  r_comp ~ nitrogen + cec + plot_size + samp_size,
   data = all_df
 ) %>%
   residuals(.) %>%
-  test_mem(., lw, nmodel = 'Compact Rhizome ~ N')
+  test_mem(., lw, nmodel = 'Compact Rhizome ~ N + CEC')
+
+# Long Creeping Rhyzome
+sac_rlr <- lm(
+  r_lr ~
+    cec +
+      plot_size +
+      samp_size,
+  data = all_df
+) %>%
+  residuals(.) %>%
+  test_mem(., lw, nmodel = 'Long-Creeping Rhizome ~ CEC')
 
 # Short Creeping Rhyzome
 sac_rcr <- lm(
@@ -129,17 +172,9 @@ sac_lmseg <- lm(
   residuals(.) %>%
   test_mem(., lw, nmodel = 'Multipinnate ~ Annual Rainfall')
 
-# Buds
-sac_buds <- lm(
-  buds ~ ann_prec + plot_size + samp_size,
-  data = all_df
-) %>%
-  residuals(.) %>%
-  test_mem(., lw, nmodel = 'Buds ~ Annual Rainfall')
-
 # Indusia
 sac_ind <- lm(
-  ind ~ ann_prec + plot_size + samp_size,
+  ind ~ prec_warm + plot_size + samp_size,
   data = all_df
 ) %>%
   residuals(.) %>%
@@ -147,26 +182,28 @@ sac_ind <- lm(
 
 # Laminae dimorphism
 sac_dim <- lm(
-  ldim ~ ann_prec + prec_seas + plot_size + samp_size,
+  ldim ~ prec_seas + plot_size + samp_size,
   data = all_df
 ) %>%
   residuals(.) %>%
-  test_mem(., lw, nmodel = 'Frond Dimorphism ~ AR + PS')
+  test_mem(., lw, nmodel = 'Frond Dimorphism ~ PS')
 
 # Spore chlorophyll
 sac_spore <- lm(
-  chl ~ prec_seas + ann_prec + plot_size + samp_size,
+  chl ~ prec_seas * ann_prec + plot_size + samp_size,
   data = all_df
 ) %>%
   residuals(.) %>%
   test_mem(
     .,
     lw,
-    nmodel = 'Spore Chlorophyll ~ Rainfall Seasonallity + Annual Rainfall + MEM5 + MEM1'
+    nmodel = 'Spore Chlorophyll ~ Rainfall Seasonallity * Annual Rainfall'
   )
 ```
 
-# Output data
+# Output data (Table 1)
+
+The output here is a supplement for Table 1 in the main text.
 
 ```{r}
 # Combine results from all models into a single data frame
@@ -175,16 +212,17 @@ cor_df <-
     sac_diam,
     sac_rcomp,
     sac_rcr,
+    sac_rlr,
     sac_lmseg,
-    sac_buds,
     sac_ind,
     sac_dim,
-    sac_spore$sac  # Note: spore includes selected MEMs
+    sac_spore
   )
 cor_df  # Display Moran's I and p-values
 ```
 
 # Saving data
+
 ```{r}
 # Save table of Moran’s I statistics
 write.xlsx(cor_df, "outputs/Moran_TRAW.xlsx", rowNames = T)

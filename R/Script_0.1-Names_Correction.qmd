@@ -1,14 +1,49 @@
 ---
-bibliography: /home/denilsonmachado/Bibliografia/library.bib
+title: "Getting and correcting taxonomic information"
+subtitle: "Species name resolution against Flora e Funga do Brasil, using bfphyto"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
 ---
-# 0.1 - Getting and correcting taxonomic info 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+# About this script
+
+This script takes a raw species (taxa) list and:
+
+- resolves species names against the **Flora e Funga do Brasil** database,
+  using the `bfphyto` package, to obtain currently accepted names;
+- merges the accepted names back into the original community matrix;
+- builds a site x taxa frequency matrix and a summary frequency table
+  (number of sites occupied, mean abundance, singletons/doubletons, etc.).
+
+# Packages
+
+All packages used are available on CRAN, except **`bfphyto`**, which is
+hosted on GitHub and is required to resolve species names against Flora
+e Funga do Brasil. The chunk below installs any missing CRAN package
+automatically, and installs `bfphyto` from GitHub if it is not already
+available.
 
 ```{r}
-# You need to install a package named bfphyto to get the correct species names using Flora e Funga do Brasil (2025).
-# To install it, use devtools; the package is hosted on GitHub (github.com/adiantopsis/bfphyto).
+# To install it `bfphyto`, use devtools; 
+# the package is hosted on GitHub (github.com/adiantopsis/bfphyto).
 # remotes::install_github('adiantopsis/bfphyto', force = TRUE)
 
-# Now we load the required CRAN packages and bfphyto
 library(skimr)      # For data summarization
 library(tidyverse)  # For data manipulation and
 # visualization (includes dplyr, ggplot2, etc.)
@@ -18,39 +53,37 @@ library(reshape)    # For data reshaping
 library(reshape2)   # Also for reshaping data (acast used later)
 library(bfphyto)    # For taxonomic name resolution using Flora e Funga do Brasil
 library(insight)    # Utility functions for model inspection, might be used later
-
+library(here)       # To capture current dir.
 
 # Set configurations for reproducibility and data formatting
 set.seed(811)          # Set random seed for reproducibility
 options(scipen = 999)  # Avoid scientific notation when printing numbers
 ```
 
-# Community Matrix
+# Community matrix
+
+We load the community matrix (`w_matrix`) and replace underscores 
+with spaces in taxa names, so they can be matched properly by `resolveSpp()`.
+
 ```{r}
 # Load species data and environmental data from Excel
 # Remove underscores from species names to work properly with resolveSpp()
-d <- read_xlsx("data/data_ferns.xlsx", sheet = "w_matrix") %>%
+d <- read_xlsx(here("data/data_ferns.xlsx"), sheet = "w_matrix") %>%
   mutate(taxa = gsub(taxa, pattern = '_', replacement = " "))  # Replace '_' with space in taxa names
-
-e <- read_xlsx("data/data_ferns.xlsx", sheet = 'e_matrix')  # Environmental matrix
 
 # Extract species names and count unique species
 spp <- d$taxa
 as.factor(spp) %>% nlevels()
 ```
-# Summarize data
-
-```{r}
-# Summarize the environmental data and write summary to Excel
-resume <- skimr::skim(e)
-# Save data in xlsx
-write.xlsx(resume, file = 'outputs/e_matrix_resume.xlsx')
-```
 # Correcting species names
 
+We download (or load, if already cached) the Flora e Funga do Brasil
+reference database and resolve the raw species names against it. This
+step may take a while on first run, since it downloads the full flora
+database; subsequent runs reuse the cached version.
+
 ```{r}
-# Download or load the flora database, using 5 cores for speed and no simplification of data
-flora <- getReflora(cores = 5, simplify = FALSE)
+flora <- getReflora(simplify = FALSE)
 
 # Resolve species names against the flora database
 my_spp <- resolveSpp(species = spp, flora = flora, simplify = T, hasAuthors = F, wantAuthors = T)
@@ -70,6 +103,7 @@ my_spp[my_spp$Status != 'Nome Aceito', ]
 # Inspect species with MatchedName pattern 'Dennstaedtia'
 my_spp[grepl(my_spp$MatchedName, pattern = 'Dennstaedtia'), ]
 ```
+
 # Merging the data with the original
 
 ```{r}
@@ -78,7 +112,7 @@ df_final <- merge(x = d, y = accept_names, by = 'taxa', all.x = T)
 dim(df_final)  # Check dimensions after merge
 
 # Save the merged data with new names to Excel
-write.xlsx(df_final, file = "outputs/data_new_names.xlsx", asTable = TRUE)
+write.xlsx(df_final, file = here("outputs/data_new_names.xlsx"), asTable = TRUE)
 
 # Explore structure of my_spp and count species by family
 glimpse(my_spp)
@@ -89,6 +123,11 @@ my_spp %>% group_by(Family) %>%
 ```
 
 # Summary frequency table
+
+We build a site x taxa matrix from the (corrected) community data, then,
+for each species, compute the total and mean abundance and the number of
+sites where it occurs, and merge that with the taxonomic information
+resolved above.
 
 ```{r}
 
@@ -140,23 +179,30 @@ df_final <- merge(
     'Frequency across sites' = nsite
   )
 
-# View the final dataframe in RStudio viewer
-View(df_final)
+```
 
-# Check unique accepted names
+
+
+## Inspecting the results
+
+```{r, eval=FALSE}
+# Open the final table in the RStudio viewer (interactive use only)
+View(df_final)
+```
+
+```{r}
+# Unique accepted names in the final table
 unique(df_final$aceptedName)
 
-# Check dimensions of df_final2 (Note: df_final2 is not defined in this script — maybe a leftover variable)
-dim(df_final2)
+# Number of singletons (species found in only 1 site)
+nrow(df_final[df_final$`Frequency across sites` == 1, ])
 
-# Count singletons (species found in only 1 site)
-dim(df_final[df_final$nsite == 1, ])
+# Number of doubletons (species found in exactly 2 sites)
+nrow(df_final[df_final$`Frequency across sites` == 2, ])
+```
 
-# Count doubletons (species found in exactly 2 sites)
-dim(df_final[df_final$nsite == 2, ])
-
-# Save the summary frequency table to Excel
-write.xlsx(df_final, file = "outputs/summary_freq.xlsx")
+```{r}
+write.xlsx(df_final, file = here("outputs/summary_freq.xlsx"))
 ```
 
 

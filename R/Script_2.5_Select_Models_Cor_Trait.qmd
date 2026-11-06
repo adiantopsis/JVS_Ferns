@@ -1,16 +1,53 @@
 ---
-lang: en-US
-bibliography: /home/denilsonmachado/Bibliografia/library.bib
+title: "On Trait-Environment Model Selection for Corrected Traits"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
 ---
 
-# 2.4 On Model Selection w/ Corrected Traits 
-## Packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+# About This Script
+
+This script, as for raw traits, shows the workflow to evaluating the relationship of Community Weighted Mean (CWM) with corrected functional traits and our environmental drivers.
+The pipeline executes the following steps:
+
+
+1) Calculates CWM values for each trait in each phylogenetic scenario.
+
+2) Fits linear models to evaluate relationships between CWM and environmental drivers across scenarios.
+
+3) Tests model residuals for spatial structure using Moran's I and Spatial Eigenvector Maps (MEM) across scenarios.
+
+4) Evaluates model robustness against sampling effort using Cook's distance correlations.
+
+
+The resulting output of this script is the main content of Table 2 and Appendix S14.
+
+> ![WARNING] 
+> Run this script demands a lot of memory (\~4 GB) and take a minute to end. Therefore, clear garbage accumulated with `gc()`, the environment and restart the session. You may not be able to run this script if you have less the 8 GB of RAM memory.
+
+# Packages and setup
 
 ```{r}
 rm(list = ls()) ## Empty environment
 gc()
 
 require(vegan)          # Ecological analysis
+library(here)           # Deal with setwd in .qmd archives with RStudio :(, but not in the nvim ;)
 library(readxl)         # Read Excel files
 library(reshape2)       # Data reshaping
 library(SYNCSA)         # SYNCSA for trait-environment modeling
@@ -19,7 +56,8 @@ library(tidyverse)      # Data manipulation and visualization
 library(foreach)        # Parallel processing (loop)
 library(doParallel)     # Parallel backend
 library(bbmle)          # AICc model selection
-source("func/summarize_trees.R")  # Custom summarizing function 
+source(here("func/summarize_trees.R"))  # Custom summarizing function 
+library(car)
 
 
 # This function summarizes model selection results across N scenarios.
@@ -54,25 +92,38 @@ set.seed(811)          # Ensure reproducibility
 options(scipen = 999)  # Disable scientific notation
 N = 1000               # Number of iterations (e.g., phylogenetic trees)
 ```
-## Trait Matrix
+
+# Trait Matrix
+In this step we will load the organized data, with the original values `org_data` alongside with `S_comp`, i.e., phylogenetic corrected trait for the 1,000 scenarios.
 
 ```{r}
-#Load data base
-S_comp <- readRDS("outputs/RDS/SCOMP.RDS")
-org_data <- readRDS("data/org_data.RDS")
+S_comp <- readRDS(here("outputs/RDS/SCOMP.RDS"))
+org_data <- readRDS(here("data/org_data.RDS"))
 ```
-## Do Parallel Computing
+
+# Do Parallel Computing
 
 ```{r}
-no_cores <- detectCores() - 4     # Reserve some CPU cores for system (adjust as needed)
+no_cores <- detectCores() - 6     # Reserve some CPU cores for system (adjust as needed)
 registerDoParallel(cores = no_cores)
 cl <- makeCluster(no_cores, type = "FORK")  # Linux/Mac only
 ```
-## Fitting models with traits CWM
-### Rhizome diameter
+
+# Model selection
+
+Now we will select the best model for each trait, as following:
+1) Arrange data iteratively with SYNCSA;
+2) Creating a list of models names (see Appendix S1 for the hypothesis of each model);
+2) Elaborating the linear models, based on the list;
+3) Select the most parsimonious models based on AICc;
+4) Filter only the best model (dAICc = 0);
+5) Save in a new object for summarize in a table.
+
+
+## Rhizome diameter
 
 ```{r}
-# Loop over all N iterations (e.g., permutations or bootstrap samples), organizing data for analysis
+# Loop over all N iterations for organize data for analysis
 or_s_diam <- foreach(i = 1:N) %dopar% {
   organize.syncsa(
     org_data$community,                  # community matrix
@@ -96,8 +147,9 @@ models <- c(
   "Rhiz. Diam ~ MT + AP + plot_size + samp_size",
   "Rhiz. Diam ~ AP * PS + plot_size + samp_size",
   "Rhiz. Diam ~ N + plot_size + samp_size",
-  "DIAM ~ CEC + plot_size + samp_size",
+  "Rhiz. Diam ~ CEC + plot_size + samp_size",
   "Rhiz. Diam ~ N + CEC + plot_size + samp_size",
+  "Rhiz. Diam ~ PW + plot_size + samp_size",
   "Rhiz. Diam ~ 1" # original model
 )
 
@@ -158,13 +210,16 @@ md6 <-
   )
 
 md7 <- foreach(i = 1:N) %dopar%
-  lm(
-    cwm_S_r_diam[[i]] ~ 1 + plot_size + samp_size,
+  glm(
+    cwm_S_r_diam[[i]] ~ prec_warm,
     data = or_s_diam[[i]]$environmental
   )
 
-# Select best model per iteration using AICc comparison
-sel_diam <-
+
+md8 <- foreach(i = 1:N) %dopar% glm(cwm_S_r_diam[[i]] ~ 1) # original model
+
+
+sel_md <-
   foreach(i = 1:N) %dopar%
   {
     AICctab(
@@ -175,22 +230,24 @@ sel_diam <-
       md5[[i]],
       md6[[i]],
       md7[[i]],
+      md8[[i]],
       base = T,
       delta = T,
-      mnames = models[1:7]
-    ) %>%
-      `class<-`("data.frame")  # Ensure output is a data.frame
+      mnames = models
+    ) %>% `class<-`("data.frame")
+    #insert class at ictab
   } %>%
   get_result() # Aggregate results from parallel loop
 
 # View AICc model selection results
+sel_diam <- sel_md
 sel_diam
-
 # Save the best model for rhizome diameter
 model_diam <- md4
 
 ```
-### Rhizome compact 
+
+## Rhizome compact
 
 ```{r}
 org_rcomp <- foreach(i = 1:N) %dopar%
@@ -220,6 +277,7 @@ models <-
     "Rhiz. Compact ~ N + plot_size + samp_size",
     "Rhiz. Compact ~ CEC + plot_size + samp_size",
     "Rhiz. Compact ~ N + CEC + plot_size + samp_size",
+    "Rhiz. Compact  ~ PW + plot_size + samp_size",
     "Rhiz. Compact  ~ 1 + plot_size + samp_size" # original model
   )
 
@@ -287,10 +345,15 @@ md7 <-
 
 md8 <- foreach(i = 1:N) %dopar%
   lm(
-    cwm_S_r_comp[[i]] ~ 1 + plot_size + samp_size,
+    cwm_S_r_comp[[i]] ~ prec_warm + plot_size + samp_size,
     data = org_rcomp[[i]]$environmental
   )
 
+md9 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_r_comp[[i]] ~ 1 + plot_size + samp_size,
+    data = org_rcomp[[i]]$environmental
+  )
 
 sel_rcomp <-
   foreach(i = 1:N) %dopar%
@@ -304,17 +367,21 @@ sel_rcomp <-
       md6[[i]],
       md7[[i]],
       md8[[i]],
+      md9[[i]],
       base = T,
       delta = T,
-      mnames = models[1:8]
+      mnames = models
     ) %>%
       `class<-`("data.frame")
   } %>%
   get_result()
+
 sel_rcomp
+
 model_comp <- md6
 ```
-### Rhizome short creeping 
+
+## Rhizome short-creeping
 
 ```{r}
 org_rcr <- foreach(i = 1:N) %dopar%
@@ -340,6 +407,7 @@ models <-
     "Rhiz. Short ~ N + plot_size + samp_size",
     "Rhiz. Short ~ CEC + plot_size + samp_size",
     "Rhiz. Short ~ N + CEC + plot_size + samp_size",
+    "Rhiz. Short  ~ PW + plot_size + samp_size",
     "Rhiz. Short  ~ 1 + plot_size + samp_size" # original model
   )
 
@@ -380,6 +448,11 @@ md7 <- foreach(i = 1:N) %dopar%
   )
 md8 <- foreach(i = 1:N) %dopar%
   lm(
+    cwm_S_r_cr[[i]] ~ prec_warm + plot_size + samp_size,
+    data = org_rcr[[i]]$environmental
+  )
+md9 <- foreach(i = 1:N) %dopar%
+  lm(
     cwm_S_r_cr[[i]] ~ 1 + plot_size + samp_size,
     data = org_rcr[[i]]$environmental
   )
@@ -396,9 +469,10 @@ sel_rcr <-
       md6[[i]],
       md7[[i]],
       md8[[i]],
+      md9[[i]],
       base = T,
       delta = T,
-      mnames = models[1:8]
+      mnames = models
     ) %>%
       `class<-`("data.frame")
   } %>%
@@ -407,7 +481,8 @@ sel_rcr
 model_rcr <- md3
 
 ```
-### Rhizome long creeping 
+
+## Rhizome long-creeping
 
 ```{r}
 org_lr <- foreach(i = 1:N) %dopar%
@@ -432,7 +507,8 @@ models <-
     "Rhiz. Long ~ N + plot_size + samp_size",
     "Rhiz. Long ~ CEC + plot_size + samp_size",
     "Rhiz. Long ~ N + CEC + plot_size + samp_size",
-    "Rhiz. Long  ~ 1 + plot_size + samp_size" # original model
+    "Rhiz. Long  ~ PW + plot_size + samp_size",
+    "Rhiz. Long  ~ 1 + plot_size + samp_size"
   )
 
 md1 <- foreach(i = 1:N) %dopar%
@@ -472,6 +548,11 @@ md7 <- foreach(i = 1:N) %dopar%
   )
 md8 <- foreach(i = 1:N) %dopar%
   lm(
+    cwm_S_r_lr[[i]] ~ prec_warm + plot_size + samp_size,
+    data = org_lr[[i]]$environmental
+  )
+md9 <- foreach(i = 1:N) %dopar%
+  lm(
     cwm_S_r_lr[[i]] ~ 1 + plot_size + samp_size,
     data = org_lr[[i]]$environmental
   )
@@ -489,6 +570,7 @@ sel_rlr <-
       md6[[i]],
       md7[[i]],
       md8[[i]],
+      md9[[i]],
       base = T,
       delta = T,
       mnames = models
@@ -499,10 +581,10 @@ sel_rlr <-
 
 sel_rlr
 
-model_lr <- md8 # Null
+model_lr <- md9 # Null
 ```
 
-### Laminae Multipinnate
+## Laminae Multipinnate
 
 ```{r}
 org_lam_mseg <- foreach(i = 1:N) %dopar%
@@ -531,6 +613,9 @@ models <- c(
   "Multipinnate ~ AP * PS + plot_size + samp_size",
   "Multipinnate ~ MT * AP + plot_size + samp_size",
   "Multipinnate ~ MT * PS + plot_size + samp_size",
+  "Multipinnate ~ MT + PW + plot_size + samp_size",
+  "Multipinnate ~ MT * PW + plot_size + samp_size",
+  "Multipinnate ~ PW + plot_size + samp_size",
   "Multipinnate ~ 1 + plot_size + samp_size"
 )
 
@@ -576,6 +661,21 @@ md8 <- foreach(i = 1:N) %dopar%
   )
 md9 <- foreach(i = 1:N) %dopar%
   lm(
+    cwm_S_lam_mseg[[i]] ~ max_temp_wam + prec_warm + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md10 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ max_temp_wam * prec_warm + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md11 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_lam_mseg[[i]] ~ prec_warm + plot_size + samp_size,
+    data = org_lam_mseg[[i]]$environmental
+  )
+md12 <- foreach(i = 1:N) %dopar%
+  lm(
     cwm_S_lam_mseg[[i]] ~ 1 + plot_size + samp_size,
     data = org_lam_mseg[[i]]$environmental
   )
@@ -593,6 +693,9 @@ sel_lmseg <-
       md7[[i]],
       md8[[i]],
       md9[[i]],
+      md10[[i]],
+      md11[[i]],
+      md12[[i]],
       base = T,
       delta = T,
       mnames = models
@@ -605,7 +708,8 @@ sel_lmseg
 
 model_mseg <- md2
 ```
-### proliferous Buds 
+
+## Proliferous Buds
 
 ```{r}
 org_buds <- foreach(i = 1:N) %dopar%
@@ -631,6 +735,9 @@ models <-
     "Buds ~ AP * PS + plot_size + samp_size",
     "Buds ~ MT * PS + plot_size + samp_size",
     "Buds ~ MT * AP + plot_size + samp_size",
+    "Buds ~ MT + PW + plot_size + samp_size",
+    "Buds ~ MT * PW + plot_size + samp_size",
+    "Buds ~ PW + plot_size + samp_size",
     "Buds  ~ 1 + plot_size + samp_size"
   )
 
@@ -671,6 +778,21 @@ md7 <- foreach(i = 1:N) %dopar%
   )
 md8 <- foreach(i = 1:N) %dopar%
   lm(
+    cwm_S_buds[[i]] ~ max_temp_wam + prec_warm + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md9 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ max_temp_wam * prec_warm + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md10 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_buds[[i]] ~ prec_warm + plot_size + samp_size,
+    data = org_buds[[i]]$environmental
+  )
+md11 <- foreach(i = 1:N) %dopar%
+  lm(
     cwm_S_buds[[i]] ~ 1 + plot_size + samp_size,
     data = org_buds[[i]]$environmental
   )
@@ -688,9 +810,12 @@ sel_buds <-
       md6[[i]],
       md7[[i]],
       md8[[i]],
+      md9[[i]],
+      md10[[i]],
+      md11[[i]],
       base = T,
       delta = T,
-      mnames = models[1:8]
+      mnames = models
     ) %>%
       `class<-`("data.frame")
   } %>%
@@ -700,7 +825,8 @@ sel_buds
 
 model_buds <- md3
 ```
-### Trichomes in laminae 
+
+## Trichomes in laminae
 
 ```{r}
 org_ltri <- foreach(i = 1:N) %dopar%
@@ -724,6 +850,9 @@ models <- c(
   "Pub. Laminae ~ AP * PS + plot_size + samp_size",
   "Pub. Laminae ~ MT * PS + plot_size + samp_size",
   "Pub. Laminae ~ MT * AP + plot_size + samp_size",
+  "Pub. Laminae ~ MT + PW + plot_size + samp_size",
+  "Pub. Laminae ~ MT * PW + plot_size + samp_size",
+  "Pub. Laminae ~ PW + plot_size + samp_size",
   "Pub. Laminae ~ 1 + plot_size + samp_size"
 )
 
@@ -759,6 +888,21 @@ md6 <- foreach(i = 1:N) %dopar%
   )
 md7 <- foreach(i = 1:N) %dopar%
   lm(
+    cwm_S_ltri[[i]] ~ max_temp_wam + prec_warm + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+md8 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ltri[[i]] ~ max_temp_wam * prec_warm + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+md9 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_ltri[[i]] ~ prec_warm + plot_size + samp_size,
+    data = org_ltri[[i]]$environmental
+  )
+md10 <- foreach(i = 1:N) %dopar%
+  lm(
     cwm_S_ltri[[i]] ~ 1 + plot_size + samp_size,
     data = org_ltri[[i]]$environmental
   )
@@ -774,9 +918,12 @@ sel_ltri <-
       md5[[i]],
       md6[[i]],
       md7[[i]],
+      md8[[i]],
+      md9[[i]],
+      md10[[i]],
       base = T,
       delta = T,
-      mnames = models[1:7]
+      mnames = models
     ) %>%
       `class<-`("data.frame")
   } %>%
@@ -784,13 +931,14 @@ sel_ltri <-
 
 sel_ltri
 
-model_ltri <- md7 #Null
+model_ltri <- md10 #Null
 
 ```
-### Indusium presence
+
+## Indusium presence
 
 ```{r}
-# indusium
+
 org_ind <- foreach(i = 1:N) %dopar%
   {
     organize.syncsa(
@@ -811,6 +959,7 @@ models <- c(
   "Indusium ~ PS + plot_size + samp_size",
   "Indusium ~ PS + AP + plot_size + samp_size",
   "Indusium ~ PS * AP + plot_size + samp_size",
+  "Indusium ~ PW + plot_size + samp_size",
   "Indusium  ~ 1 + plot_size + samp_size"
 )
 
@@ -836,6 +985,11 @@ md4 <- foreach(i = 1:N) %dopar%
   )
 md5 <- foreach(i = 1:N) %dopar%
   lm(
+    cwm_S_ind[[i]] ~ prec_warm + plot_size + samp_size,
+    data = org_ind[[i]]$environmental
+  )
+md6 <- foreach(i = 1:N) %dopar%
+  lm(
     cwm_S_ind[[i]] ~ 1 + plot_size + samp_size,
     data = org_ind[[i]]$environmental
   )
@@ -849,6 +1003,7 @@ sel_ind <-
       md3[[i]],
       md4[[i]],
       md5[[i]],
+      md6[[i]],
       base = T,
       delta = T,
       mnames = models
@@ -859,9 +1014,10 @@ sel_ind <-
 
 sel_ind
 
-model_ind <- md5
+model_ind <- md6 #Null
 ```
-### Laminae morphology 
+
+## Laminae morphology
 
 ```{r}
 org_lmorf <- foreach(i = 1:N) %dopar%
@@ -887,6 +1043,7 @@ models <-
     "Dimorphism ~ PS + plot_size + samp_size",
     "Dimorphism ~ AP + PS + plot_size + samp_size",
     "Dimorphism ~ PS * AP + plot_size + samp_size",
+    "Dimorphism ~ PW + plot_size + samp_size",
     "Dimorphism  ~ 1 + plot_size + samp_size"
   )
 
@@ -912,6 +1069,11 @@ md4 <- foreach(i = 1:N) %dopar%
   )
 md5 <- foreach(i = 1:N) %dopar%
   lm(
+    cwm_S_lmorf[[i]] ~ prec_warm + plot_size + samp_size,
+    data = org_lmorf[[i]]$environmental
+  )
+md6 <- foreach(i = 1:N) %dopar%
+  lm(
     cwm_S_lmorf[[i]] ~ 1 + plot_size + samp_size,
     data = org_lmorf[[i]]$environmental
   )
@@ -925,9 +1087,10 @@ sel_lmorf <-
       md3[[i]],
       md4[[i]],
       md5[[i]],
+      md6[[i]],
       base = T,
       delta = T,
-      mnames = models[1:5]
+      mnames = models
     ) %>%
       `class<-`("data.frame")
   } %>%
@@ -935,9 +1098,10 @@ sel_lmorf <-
 
 sel_lmorf
 
-model_dim <- md1
+model_dim <- md6 #Null
 ```
-### Spore Chlorophyll
+
+## Spore Chlorophyll
 
 ```{r}
 org_chl <- foreach(i = 1:N) %dopar%
@@ -967,6 +1131,9 @@ models <-
     "Chlorophyll ~ MT + AP + plot_size + samp_size",
     "Chlorophyll ~ MT + PS + plot_size + samp_size",
     "Chlorophyll ~ C + plot_size + samp_size",
+    "Chlorophyll ~ MT + PW + plot_size + samp_size",
+    "Chlorophyll ~ MT * PW + plot_size + samp_size",
+    "Chlorophyll ~ PW + plot_size + samp_size",
     "Chlorophyll  ~ 1 + plot_size + samp_size"
   )
 
@@ -1013,6 +1180,21 @@ md8 <- foreach(i = 1:N) %dopar%
   )
 md9 <- foreach(i = 1:N) %dopar%
   lm(
+    cwm_S_chl[[i]] ~ max_temp_wam + prec_warm + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md10 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ max_temp_wam * prec_warm + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md11 <- foreach(i = 1:N) %dopar%
+  lm(
+    cwm_S_chl[[i]] ~ prec_warm + plot_size + samp_size,
+    data = org_chl[[i]]$environmental
+  )
+md12 <- foreach(i = 1:N) %dopar%
+  lm(
     cwm_S_chl[[i]] ~ 1 + plot_size + samp_size,
     data = org_chl[[i]]$environmental
   )
@@ -1031,6 +1213,9 @@ sel_chl <-
       md7[[i]],
       md8[[i]],
       md9[[i]],
+      md10[[i]],
+      md11[[i]],
+      md12[[i]],
       base = T,
       delta = T,
       mnames = models
@@ -1043,19 +1228,23 @@ sel_chl
 
 model_spore <- md2
 ```
-## Stop parallel computing
+
+# Stop parallel computing
 
 ```{r}
 stopCluster(cl)
 ```
-## Output
+
+# Output
+
+The output here is the number that each model was selected as best (dAICc = 0), that is a supplement of Table 2 and Appendix S14.
 
 ```{r}
 ## Elaborate a list of models
 a <- list(model_diam,
   model_comp, #compact rhizome
-  model_rcr, #short-creeping rhizomme
-  model_lr, #long-creeping rhizomme
+  model_rcr, #short-creeping rhizome
+  model_lr, #long-creeping rhizome
   model_mseg, #laminae multipinnate
   model_buds, # proliferous buds
   model_ltri, #trichome in laminae
@@ -1064,7 +1253,7 @@ a <- list(model_diam,
   model_spore #spore Chlorophyll
 )
 
-# Extract the coefficients from each model see "func/" folder for details of get_model function
+# Extract the coefficients from each model 
 model_results <- lapply(a, function (x) map_dfr(x, get_model))
 
 head(model_results[[2]])
@@ -1088,7 +1277,7 @@ mod_df <- map_dfr(model_results, function (result){
 view(mod_df)
 
 #Save data
-write.xlsx (x = mod_df, file = "outputs/Corrected/summ_models_tcor.xlsx", rowNames = T)
+write.xlsx (x = mod_df, file = here("outputs/summ_models_tcor.xlsx"), rowNames = T)
 
 
 ## Output resumed data
@@ -1107,7 +1296,7 @@ forw <- rbind(
   mutate(models = rownames(.), .before = n_sel) %>%
   remove_rownames()
 
-## Separete the models without predictors (bad_mods), from the model with at least one
+## Separate the models without predictors (bad_mods), from the model with at least one
 ## environmental predictor
 rows <- grep("1", forw$models)
 nice_mods_Scomp <- forw[-rows, ] # Models w/ env predictors
@@ -1138,11 +1327,12 @@ names(cwm_list) <- c(
   "ind"
 )
 ```
+
 ## Saving data
 
 ```{r}
 ## Save CWM list
-saveRDS(cwm_list, "data/cwm_list.RDS")
+saveRDS(cwm_list, here("data/cwm_list.RDS"))
 
 ## Save resumed data
 wb_md_S <- list(
@@ -1151,5 +1341,110 @@ wb_md_S <- list(
   all_mods_S = forw
 )
 
-write.xlsx(wb_md_S, file = "outputs/Corrected/mod_select_cwm.xlsx",rowNames = T, overwrite = TRUE)
+write.xlsx(wb_md_S, file = here("outputs/mod_select_cwm.xlsx"),rowNames = T, overwrite = TRUE)
+```
+
+# Robustness of models
+
+To demonstrate model robustness, here we will calculate Cook’s distance of models coefficients. For the phylogenetic corrected models we used the Cook’s distance average for the j-th site as Cj measurement.
+
+The results will be a supplement for Table 2, Appendix S12 and Appendix S14.
+
+```{r}
+nice_mods <- list(
+  model_diam,
+  model_comp, #compact rhizome
+  model_rcr, #short-creeping rhizome
+  model_mseg, #laminae multipinnate
+  model_buds, # proliferous buds
+  model_spore #spore Chlorophyll
+)
+ 
+# Mesuring cooks distance for models coeficients
+cook <- sapply(nice_mods, function (x) {
+  sapply(x, cooks.distance) %>%
+    rowMeans(.) # We will extract the mean for j-th site to be concise
+})
+
+# Add trait names in the cooks distance matrix
+colnames(cook) <- c("diam",
+                    "r_comp",
+                    "r_cr",
+                    "l_mseg",
+                    "buds",
+                    "chl")
+
+# Transforming in df and adding sample size
+cook_d <-
+  cbind.data.frame(samp_size = org_data$environmental$samp_size
+                   [match(rownames(org_data$environmental),# Names must match 
+                          rownames(cook))], cook) 
+
+# Save data 
+# saveRDS(cook_d, file = "outputs/cook_tcor.RDS")
+
+# Loading again if needed
+# cook_d <- readRDS(here("outputs/cook_tcor.RDS"))
+
+shapiro.test(cook_d$samp_size)
+
+# Computing kendall correlation of cook's distance and sample size
+kendall_results <- sapply(2:7, USE.NAMES = TRUE, function(x) {
+  y <- cook_d[, x]
+  samp <- cook_d$samp_size
+  test <- cor.test(y, samp, method = "kendall")
+  data <- c(tau = as.numeric(test$estimate),
+            p_value = as.numeric(test$p.value))
+  data
+})
+
+# Adding colnames in the resulting matrix
+colnames(kendall_results) <- colnames(cook_d)[-1]
+
+# Transforming in a transpose df 
+kendall_summary <- as.data.frame(t(round(kendall_results,2)))
+write.xlsx(kendall_summary, here("outputs/CS_tcor.xlsx"))
+
+# Creating a vector with real names of traits to use in the final plots
+names <- c(
+  "Rhiz. Diameter",
+  "Rhiz. Compact",
+  "Rhiz. Short-Creeping",
+  "Lam. Multipinnate",
+  "Buds presence",
+  "Spore Chlorophyll"
+)
+
+
+# Plotting data for visual inspection
+tiff(
+  file = here("figs/cook_tcor.tiff"),
+  width = 180,
+  height = 100,
+  units = "mm",
+  res = 300)
+
+par(mfrow = c(2, 3), mar = c(4, 4, 2, 1))
+
+sapply(1:6, function(i) {
+  cook <- cook_d[, -1]
+  col_name <- cook[, i]
+  name <- names[i]
+  plot(
+    y = col_name,
+    x = log10(cook_d$samp_size),
+    cex.main = 0.8,
+    ylab = "Cook's Distance",
+    xlab = "Sample effort (log10)",
+    main = paste0(name, " (Cor.)"),
+    pch = 15,
+    col = rgb(0, 0, 0, 0.5),
+    ylim = c(0, 2)
+  )
+  abline(h = 1, col = "red", lty = 2) # abline in D = 1 limit common limit for really influential points
+})
+
+dev.off()
+
+
 ```

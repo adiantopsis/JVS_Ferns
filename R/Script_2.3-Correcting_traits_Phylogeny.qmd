@@ -1,16 +1,38 @@
 ---
-bibliography: /home/denilsonmachado/Bibliografia/library.bib
-lang: en-US
+title: "On Phylogenetic Correction for Binary Traits Across 1,000 Scenarios"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
 ---
 
-# 2.3. Removing phylogenetic signal 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
 
-In this phase we are removing phylogenetic signal from traits, using PGLS for continuous traits and PVR + Binomial GLM to binary traits, based on the @Iserhard2019 procedure. The binary traits are corrected with PVR.bi_sig function developed by us, and is available in "func/" folder. This function is applied for each phylogenetic scenario. 
+# About This Script
 
-This script require ~3 GiB of RAM Memory
-Always run in a clean r-session with an empty environment
+In this phase we are removing phylogenetic signal from traits, using PGLS for continuous traits [Rohlf (2001)](https://doi.org/10.1111/j.0014-3820.2001.tb00731.x) and PVR + Binomial GLM for binary traits, based on the [Iserhard et al. (2019)](https://doi.org/10.1007/s10531-018-1678-8) procedure. The binary traits are corrected with PVR.bi_sig function developed by us, and is available in "func/" folder. This function is applied for each phylogenetic scenario. 
 
-## Packages
+The final output produces phylogeny-free traits to modelling and the Appendix S13 which is results of the phylogenetic correction for each trait.
+
+> ![WARNING] 
+> The creation of the phylogenetic scenarios demands a lot of memory and take a minute to end. Therefore, clear garbage accumulated with `gc()`, the environment and restart the session. You may not be able to run this script if you have less the 8 GB of RAM memory.
+
+# Packages and setup
+
+As usual, multiple packages are required to do run this script, most of them are available on CRAN. Some of then aren't available on CRAN, see below.
+
 ```{r}
 # .rs.restartR() ## Restart R session
 # devtools::install_github("cran/binomTools") # Install binomTools if not yet
@@ -18,30 +40,32 @@ rm(list = ls()) ## Clear the R environment
 gc() ## Run garbage collection to free up memory
 
 source("func/PVR.bi_sig.R") # Load custom function for binary trait correction
-library(openxlsx) # For reading/writing Excel files
 library(rsq) # For R-squared calculations
-library(openxlsx) # Duplicate (safe to ignore)
 library(foreach) # For loop abstraction
 library(doParallel) # For parallel execution
 library(readxl) # For reading Excel files
-require(binomTools) # For binomial-related tools
-library(readxl) # Duplicate (safe to ignore)
+library(binomTools) # For binomial GLM related tools
 library(PVR) # For phylogenetic eigenvector regression
 library(ape) # For handling phylogenetic trees
 library(phytools) # For phylogenetic analyses
 library(dplyr) # For data manipulation
 library(nlme) # For PGLS models
 library(tidyverse) # Load several packages in the tidyverse
+library(openxlsx) 
 
 set.seed(811) ## Set seed for reproducibility
 options(scipen = 999) ## Avoid scientific notation in outputs
-N = 100 # Number of trees/replicates to run
+N = 1000 # Number of trees/replicates to run
 ```
-## Load data
-```{r}
-org_data <- readRDS("data/org_data.RDS") # Load dataset with traits and tree tips
 
-trees <- read.tree("data/new_ftrees.txt")[1:N] # Read 1000 phylogenetic trees
+# Load data
+
+In this step we will need the community matrix and the trait matrix, therefore, we will load the organized dataset.
+
+```{r}
+org_data <- readRDS(here("data/org_data.RDS")) # Load dataset with traits and tree tips
+
+trees <- read.tree(here("data/new_ftrees.txt"))[1:N] # Read 1000 phylogenetic trees
 
 org_data$traits <- filter(
   org_data$traits,
@@ -53,13 +77,21 @@ org_traits <- foreach(i = 1:N) %do%
     org_data$traits[match(trees[[i]]$tip.label, rownames(org_data$traits)), ]
   } # Align traits with each tree tip order
 ```
-## Do parallel computing
+
+# Do parallel computing
+
+As in others scripts we will use parallel computing to hurry to work with the lists and hurry up the process.
+
 ```{r}
 no_cores <- detectCores() - 4 # Use available cores minus 4 (leave some for system)
 registerDoParallel(cores = no_cores) # Register parallel backend
 cl <- makeCluster(no_cores, type = "FORK") # Create parallel cluster using FORK
 ```
-## Rhizome Diameter
+
+# Rhizome Diameter
+
+For Rhizome diameter correction we will use the already well established procedure of PGLS from [Rohlf (2001)](https://doi.org/10.1111/j.0014-3820.2001.tb00731.x).
+
 ```{r}
 fit.pgls <- foreach(i = 1:N) %dopar%
   {
@@ -102,16 +134,30 @@ S_K_diam_P <- foreach(i = 1:N, .combine = c, .verbose = T) %dopar%
 
 S_comp_K <- cbind.data.frame(K = S_K_diam, pvalue = S_K_diam_P) # Combine K and p-values
 ```
-### Saving data
+
+## Saving data
+
+In this step we will save the results of Blomberg's K for each scenario.
 
 ```{r}
 write.xlsx(
   S_comp_K,
-  file = 'outputs/phylogenetic_info/sig_correction.xlsx',
+  file = here('outputs/phylogenetic_info/sig_correction.xlsx'),
   startCol = 1,
   startRow = 1
 ) # Save results to Excel
 ```
+
+
+# Binary traits
+
+Now we will start the portion of correction with binary traits, to do so we will use the function
+PVR.bi_sig. 
+
+We will repeat the same process for each trait, as following: 
+1) Get i-trait at the i-phylogenetic scheme from trait matrix;
+2) Run PVR.bi_sig function for the i-trait alongside with the i-phylogenetic scheme.
+
 ## Compact Rhizome
 
 ```{r}
@@ -121,11 +167,16 @@ riz_comp <- foreach(i = 1:N) %dopar%
       `names<-`(rownames(org_traits[[i]])) # Extract "r_comp" trait for each tree
   }
 
+ # Correct for phylogenetic signal
 riz_comp_correction <- foreach(i = 1:N) %dopar%
   {
-    PVR.bi_sig(t = riz_comp[[i]], tree = trees[[i]]) # Correct for phylogenetic signal
+    PVR.bi_sig(t = riz_comp[[i]], # t is a trait vector with binary values
+    tree = trees[[i]] # tree is the phylogenetic hypothesis
+    )
   }
+
 ```
+
 ## Short Creeping Short-Creeping
 
 ```{r}
@@ -140,6 +191,7 @@ riz_cr_correction <- foreach(i = 1:N) %dopar%
     PVR.bi_sig(t = riz_cr[[i]], tree = trees[[i]])
   }
 ```
+
 ## Long-Creeping Rhizome
 
 ```{r}
@@ -154,6 +206,7 @@ riz_lr_correction <- foreach(i = 1:N) %dopar%
     PVR.bi_sig(t = riz_lr[[i]], tree = trees[[i]])
   }
 ```
+
 ## Multipinnate Laminae
 
 ```{r}
@@ -166,8 +219,9 @@ lam_mseg <- foreach(i = 1:N) %dopar%
 lam_mseg_correction <- foreach(i = 1:N) %dopar%
   {
     PVR.bi_sig(t = lam_mseg[[i]], tree = trees[[i]])
-  }
+)  }
 ```
+
 ## Proliferous buds
 
 ```{r}
@@ -182,6 +236,7 @@ buds_correction <- foreach(i = 1:N) %dopar%
     PVR.bi_sig(t = buds[[i]], tree = trees[[i]])
   }
 ```
+
 ## Laminae trichome
 
 ```{r}
@@ -196,7 +251,8 @@ ltri_correction <- foreach(i = 1:N) %dopar%
     PVR.bi_sig(t = ltri[[i]], tree = trees[[i]])
   }
 ```
-## Indusium/pseudo-indusium 
+
+## Indusium
 
 ```{r}
 ind <- foreach(i = 1:N) %dopar%
@@ -210,6 +266,7 @@ ind_correction <- foreach(i = 1:N) %dopar%
     PVR.bi_sig(t = ind[[i]], tree = trees[[i]])
   }
 ```
+
 ## Frond morphology
 
 ```{r}
@@ -224,6 +281,7 @@ lmorf_correction <- foreach(i = 1:N) %dopar%
     PVR.bi_sig(t = lmorf[[i]], tree = trees[[i]])
   }
 ```
+
 ## Spore chlorophyll 
 
 ```{r}
@@ -238,12 +296,19 @@ chl_correction <- foreach(i = 1:N) %dopar%
     PVR.bi_sig(t = chl[[i]], tree = trees[[i]])
   }
 ```
-##  Stop Parallel computing
+
+#  Stop Parallel computing
 
 ```{r}
 stopCluster(cl)
 ```
-## Output Data 
+
+# Output Data 
+
+For the output we must: 
+
+1) Extract the PVR results from the list create by PVR.bi_sig function;
+2) Combine into a df.
 
 ```{r}
 riz_comp_sig <- foreach(i = 1:N) %dopar%
@@ -301,7 +366,9 @@ chl_sig <- foreach(i = 1:N) %dopar%
   map_dfr(.f = cbind, .id = 'trees')
 ```
 
-### Save in a list the PVRs pseudo-R2 results 
+# Save in a list the PVRs pseudo-R2 results (Appendix S13)
+
+We will save and create the Appendix S13.
 
 ```{r}
 PVR <- vector(mode = "list") #empty list
@@ -315,7 +382,7 @@ PVR[[7]] <- ind_sig
 PVR[[8]] <- lmorf_sig
 PVR[[9]] <- chl_sig
 
-#vector of traits names
+# vector with traits names
 names <- c(
   "riz_comp",
   "riz_cr",
@@ -331,23 +398,27 @@ names <- c(
 # Summarize the results of PVR (mean and range)
 PVR_table <- foreach(i = 1:N, j = seq_along(names)) %dopar%
   {
-    TABLE_MEAN(PVR[[i]], names[i])
+    TABLE_MEAN(PVR[[i]], names[i]) # This is a custom function inside PVR_bi.sig that
+    # prepare a summary of PVR results
   } %>%
   list_cbind(name_repair = "unique")
 ```
-### Save PVR data 
+
+
+# Save PVR data 
 
 ```{r}
 write.xlsx(
-  x = t(PVR_table),
-  file = "outputs/phylogenetic_info/pvr_results.xlsx",
+  x = t(PVR_table), # We will transpose the PVR table for consistency
+  file = here("outputs/pvr_results.xlsx"),
   startRow = 1,
   startCol = 1,
   keepNA = T,
   rowNames = T
 ) # 
 ```
-### Saving corrected trait
+
+# Saving corrected trait
 
 ```{r}
  # extract the corrected trait and add to a empty list
@@ -403,7 +474,7 @@ names(Scomp) <- c(
   "riz_diam"
 )
 
-length(Scomp[[2]])
-saveRDS(Scomp, file = "outputs/RDS/SCOMP.RDS") # S Comp from traits
-saveRDS(PVR, file = "outputs/RDS/PVR.RDS") # PVR Results
+length(Scomp[[6]])
+saveRDS(Scomp, file = here("outputs/RDS/SCOMP.RDS")) # S Comp from traits
+saveRDS(PVR, file = here("outputs/RDS/PVR.RDS")) # PVR Results
 ```

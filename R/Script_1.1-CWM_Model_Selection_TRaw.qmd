@@ -1,6 +1,46 @@
-# 1.1. On Model Selection With Raw Traits 
-Here we will select the best model to explain each trait variation, we base this model on multiple hypothesis testing. 
+---
+title: "On Trait-Environment Model Selection for RAW Traits"
+author: "Denilson da Silva Machado & Guilherme dos Santos Dubal Seger"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  eval = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+# About This Script
+
+This script shows the workflow for evaluating the relationship of Community Weighted Mean (CWM) with raw functional traits and our environmental drivers.
+The pipeline executes the following steps:
+
+1) Organize raw trait data of terrestrial ferns from the Southern Atlantic Forest (SAF).
+
+2) Calculates CWM values for each trait frameworks.
+
+3) Fits linear models to evaluate relationships between CWM and environmental drivers.
+
+4) Tests model residuals for spatial structure using Moran's I and Spatial Eigenvector Maps (MEM).
+
+5) Evaluates model robustness against sampling effort using Cook's distance correlations.
+
+The resulting output of this script is the main content of Table 1 and Appendix S11.
+
 # Packages 
+
+Again, multiple packages are required to run this script, most of
+them are available on CRAN, see below.
 
 ```{r}
 # Clear the environment and load required packages
@@ -8,28 +48,32 @@ rm(list = ls()) ## Empty environment
 gc() # Clean up memory
 
 # Required libraries (some are commented out for optional installation)
+library(car)          # Evaluate the influence of points in model's predictions  
 library(conflicted)   # Manage conflicts between packages
 library(tidyverse)    # Data manipulation and visualization
 library(openxlsx)     # Export results to Excel
 library(vegan)        # Ecological analysis (e.g., community matrix)
 library(readxl)       # Read Excel files
-library(reshape)      # Data reshaping
 library(reshape2)     # Alternative reshaping tools
 library(SYNCSA)       # Trait-based community ecology
 library(jtools)       # Model summary output formatting
 library(interactions) # For interaction terms in models
 library(bbmle)        # Model selection and AIC comparison
+library(here)         # To establish the path context
+
 
 # Reproducibility settings
 set.seed(811)              # Reproducible randomization
 options(scipen = 999)      # Avoid scientific notation in numeric output
 conflicts_prefer(dplyr::filter(), dplyr::mutate()) # Prefer dplyr functions
 ```
+
 # Community Matrix 
-Again we load and adjust the community matrix.
+Again we load and adjust the community matrix. The site-by-species abundance data is reshaped into a matrix filled with absolute taxon frequencies.
+
 ```{r}
 # Load species frequency data (site x species matrix)
-d <- read_xlsx("data/data_ferns.xlsx", sheet = "w_matrix")
+d <- read_xlsx(here("data/data_ferns.xlsx"), sheet = "w_matrix")
 
 # Build a community matrix of absolute frequencies
 w_matrix <- reshape2::acast(
@@ -40,22 +84,25 @@ w_matrix <- reshape2::acast(
 ) %>%
   round(digits = 2)
 
-head(w_matrix) # Preview matrix
+head(w_matrix) 
 ```
 
 # X Variables 
 Now, the predictors...
+
 ```{r}
-x_ncor <- read_xlsx("data/data_ferns.xlsx", sheet = 'e_matrix') %>%
+x_ncor <- read_xlsx(here("data/data_ferns.xlsx"), sheet = 'e_matrix') %>%
   dplyr::filter(Site %in% rownames(w_matrix)) |>
   column_to_rownames("Site")
 ```
 
 # Trait Matrix 
 Finally, the trait matrix. Here we will transform each trait to binary (presence/absence).
+
 ```{r}
 #Load trait matrix
-t_matrix <- read_xlsx("data/data_ferns.xlsx", sheet = 't_matrix') 
+t_matrix <- read_xlsx( here("data/data_ferns.xlsx"), sheet = 't_matrix') 
+
 # Convert categorical trait variables into binary format (presence/absence)
 rhiz_type <- table(t_matrix$taxa, t_matrix$rhizome_type)
 morph <- table(t_matrix$taxa, t_matrix$frond_morphology)
@@ -82,7 +129,9 @@ glimpse(t)
 view(t)
 ```
 
-# Organizing the raw dataset 
+# Organizing the Raw Dataset 
+
+We organize the dataset using SYNCSA.
 
 ```{r}
 trait_raw <- organize.syncsa(
@@ -91,10 +140,12 @@ trait_raw <- organize.syncsa(
   envir = x_ncor
 )
 identical(rownames(trait_raw$traits), colnames(trait_raw$community))
+
+saveRDS(file = here("data/org_data.RDS", trait_raw) )  # Save for reproducibility
 ```
 
 # Compute CWM
-Now we will compute the community weighted mean for each trait, but using absolute frequency as weight.
+Now we will compute the Community Weighted Mean for each trait, but using absolute frequency as weight.
 
 ```{r}
 cwm_values <- matrix.t(trait_raw$community, trait_raw$traits)$matrix.T %>%
@@ -103,7 +154,7 @@ cwm_values <- matrix.t(trait_raw$community, trait_raw$traits)$matrix.T %>%
   add_column(trait_raw$environmental)
 ```
 
-# Model selection
+# Model Selection
 Now we will select the best model for each trait, as following:
 1) Creating a list of models names (see Appendix S1 for the hypothesis of each model);
 2) Elaborating the linear models, based on the list;
@@ -114,7 +165,6 @@ Now we will select the best model for each trait, as following:
 ## Rhizome diameter 
 
 ```{r}
-
 # Create list of candidate models to explain this trait 
 models <- c(
   "diam ~ max_temp, data = cwm_values",
@@ -123,6 +173,7 @@ models <- c(
   "diam ~ nitrogen, data =cwm_values",
   "diam ~ cec, data = cwm_values",
   "diam ~ nitrogen + cec, data = cwm_values",
+  "diam ~ prec_wam, data = cwm_values",
   "diam ~ 1"
 )
 
@@ -145,8 +196,9 @@ md5 <- lm(diam ~ cec + plot_size + samp_size, data = cwm_values)
 
 md6 <- lm(diam ~ nitrogen + cec + plot_size + samp_size, data = cwm_values)
 
-md7 <- lm(diam ~ 1 + plot_size + samp_size, data = cwm_values)
+md7 <- lm(diam ~ prec_warm + plot_size + samp_size, data = cwm_values)
 
+md8 <- lm(diam ~ 1 + plot_size + samp_size, data = cwm_values)
 
 # Select the best model 
 sel_md <- AICctab(
@@ -157,6 +209,7 @@ sel_md <- AICctab(
   md5,
   md6,
   md7,
+  md8,
   base = T,
   delta = T,
   mnames = models
@@ -175,7 +228,8 @@ result_diam <- cbind.data.frame(
 mod_diam <- md3
 summary(md3, digits = 3)
 ```
-## Rhyzome compact 
+
+## Rhizome compact 
 
 ```{r}
 # Create list of candidate models to explain this trait 
@@ -187,6 +241,7 @@ models <- c(
   "r_comp  ~ nitrogen, data = cwm_values",
   "r_comp  ~ cec, data = cwm_values",
   "r_comp  ~ nitrogen + cec, data = cwm_values",
+  "r_comp ~ prec_warm, data = cwm_values",
   "r_comp  ~ 1"
 )
 
@@ -217,7 +272,12 @@ md7 <- lm(
   data = cwm_values
 )
 
-md8 <- lm(r_comp ~ 1 + plot_size + samp_size, data = cwm_values)
+md8 <- lm(
+  r_comp ~ prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md9 <- lm(r_comp ~ 1 + plot_size + samp_size, data = cwm_values)
 
 # Select models based on AICc
 sel_md <- AICctab(
@@ -229,6 +289,7 @@ sel_md <- AICctab(
   md6,
   md7,
   md8,
+  md9,
   base = T,
   delta = T,
   mnames = models
@@ -247,10 +308,11 @@ result_rcomp <- cbind.data.frame(
   filter(dAICc == 0)
 
 
-mod_rcomp <- md5 # Save model
-summary(md5) # Check summary
+mod_rcomp <- md7 # Save model
+summary(md7) # Check summary
 ```
-## Rhyzome short-creeping
+
+## Rhizome short-creeping
 
 ```{r}
 models <- c(
@@ -261,6 +323,7 @@ models <- c(
   "r_cr  ~ nitrogen, data = cwm_values",
   "r_cr  ~ cec, data = cwm_values",
   "r_cr  ~ nitrogen + cec, data = cwm_values",
+  "r_cr ~ prec_wam, data = cwm_values",
   "r_cr  ~ 1"
 )
 
@@ -287,7 +350,12 @@ md7 <- lm(
   data = cwm_values
 )
 
-md8 <- lm(r_cr ~ 1 + plot_size + samp_size, data = cwm_values)
+md8 <- lm(
+  r_cr ~ prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md9 <- lm(r_cr ~ 1 + plot_size + samp_size, data = cwm_values)
 
 sel_md <- AICctab(
   md1,
@@ -297,9 +365,11 @@ sel_md <- AICctab(
   md5,
   md6,
   md7,
+  md8,
+  md9,
   base = T,
   delta = T,
-  mnames = models[1:7]
+  mnames = models
 )
 
 class(sel_md) <- "data.frame" #insert class at ictab
@@ -316,7 +386,8 @@ mod_rcr <- md1
 
 summary(md1)
 ```
-## Rhyzome long-creeping
+
+## Rhizome long-creeping
 
 ```{r}
 models <- c(
@@ -327,6 +398,7 @@ models <- c(
   "r_lr  ~ nitrogen, data = cwm_values",
   "r_lr  ~ cec, data = cwm_values",
   "r_lr  ~ nitrogen + cec, data = cwm_values",
+  "r_lr ~ prec_wam, data = cwm_values",
   "r_lr  ~ 1"
 )
 
@@ -356,7 +428,12 @@ md7 <- lm(
   data = cwm_values
 )
 
-md8 <- lm(r_lr ~ 1 + plot_size + samp_size, data = cwm_values)
+md8 <- lm(
+  r_lr ~ prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md9 <- lm(r_lr ~ 1 + plot_size + samp_size, data = cwm_values)
 
 sel_md <- AICctab(
   md1,
@@ -367,9 +444,10 @@ sel_md <- AICctab(
   md6,
   md7,
   md8,
+  md9,
   base = T,
   delta = T,
-  mnames = models[1:8]
+  mnames = models
 )
 
 sel_md
@@ -383,12 +461,14 @@ result_lr <- cbind.data.frame(
 ) %>%
   filter(., dAICc == 0)
 
-summary(md8, digits = 3)
+summary(md6, digits = 3)
 
-mod_lr <- md8
+mod_lr <- md6
 ```
+
 ## Laminae dissection 
-Laminae multipinnate (+2 pinnate)
+
+Here we have considered laminae multipinnate as those with +2 pinnate.
 
 ```{r}
 models <- c(
@@ -400,6 +480,9 @@ models <- c(
   "lmseg ~ ann_prec * prec_seas, data = cwm_values",
   "lmseg ~ max_temp_wam * ann_prec, data = cwm_values",
   "lmseg ~ max_temp_wam * prec_seas, data = cwm_values",
+  "lmseg ~ max_temp_wam + prec_warm, data = cwm_values",
+  "lmseg ~ max_temp_wam * prec_warm, data = cwm_values",
+  "lmseg ~ prec_warm, data = cwm_values",
   "lmseg ~ 1"
 )
 md1 <- lm(lmseg ~ max_temp_wam + plot_size + samp_size, data = cwm_values)
@@ -433,7 +516,22 @@ md8 <- lm(
   data = cwm_values
 )
 
-md9 <- lm(lmseg ~ 1 + plot_size + samp_size, data = cwm_values)
+md9 <- lm(
+  lmseg ~ max_temp_wam + prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md10 <- lm(
+  lmseg ~ max_temp_wam * prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md11 <- lm(
+  lmseg ~  prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md12 <- lm(lmseg ~ 1 + plot_size + samp_size, data = cwm_values)
 
 sel_md <- AICctab(
   md1,
@@ -445,9 +543,12 @@ sel_md <- AICctab(
   md7,
   md8,
   md9,
+  md10,
+  md11,
+  md12,
   base = T,
   delta = T,
-  mnames = models[1:9]
+  mnames = models
 )
 
 class(sel_md) <- "data.frame" #insert class at ictab
@@ -465,6 +566,7 @@ mod_lmseg <- md2
 
 summary(md2)
 ```
+
 ## Proliferous buds 
 
 ```{r}
@@ -476,6 +578,9 @@ models <- c(
   "buds ~ ann_prec * prec_seas, data = cwm_values",
   "buds ~ max_temp_wam * prec_seas, data = cwm_values",
   "buds ~ max_temp_wam * ann_prec, data = cwm_values",
+  "buds ~ max_temp_wam + prec_warm, data = cwm_values",
+  "buds ~ max_temp_wam * prec_warm, data = cwm_values",
+  "buds ~ prec_warm, data = cwm_values",
   "buds ~ 1"
 )
 
@@ -507,7 +612,20 @@ md7 <- lm(
   data = cwm_values
 )
 
-md8 <- lm(buds ~ 1 + plot_size + samp_size, data = cwm_values)
+md8 <- lm(
+  buds ~ max_temp_wam + prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+md9 <- lm(
+  buds ~ max_temp_wam * prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+md10 <- lm(
+  buds ~ prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md11 <- lm(buds ~ 1 + plot_size + samp_size, data = cwm_values)
 
 sel_md <- AICctab(
   md1,
@@ -518,9 +636,12 @@ sel_md <- AICctab(
   md6,
   md7,
   md8,
+  md9,
+  md10,
+  md11,
   base = T,
   delta = T,
-  mnames = models[1:8]
+  mnames = models
 )
 
 sel_md
@@ -534,9 +655,10 @@ result_buds <- cbind.data.frame(
 ) %>%
   filter(dAICc == 0)
 
-summary(md2)
-mod_buds <- md2
+summary(md11)
+mod_buds <- md11
 ```
+
 ## Laminae trichome
 
 ```{r}
@@ -547,6 +669,9 @@ models <- c(
   "ltri ~ ann_prec * prec_seas, data = cwm_values",
   "ltri ~ max_temp_wam * ann_prec, data = cwm_values",
   "ltri ~ max_temp_wam * prec_seas, data = cwm_values",
+  "ltri ~ max_temp_wam + prec_warm, data = cwm_values",
+  "ltri ~ max_temp_wam * prec_warm, data = cwm_values",
+  "ltri ~ prec_warm, data = cwm_values",
   "ltri ~ 1"
 )
 
@@ -574,7 +699,22 @@ md6 <- lm(
   data = cwm_values
 )
 
-md7 <- lm(ltri ~ 1 + plot_size + samp_size, data = cwm_values)
+md7 <- lm(
+  ltri ~ max_temp_wam + prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md8 <- lm(
+  ltri ~ max_temp_wam * prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md9 <- lm(
+  ltri ~ prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md10 <- lm(ltri ~ 1 + plot_size + samp_size, data = cwm_values)
 
 sel_md <- AICctab(
   md1,
@@ -584,9 +724,12 @@ sel_md <- AICctab(
   md5,
   md6,
   md7,
+  md8,
+  md9,
+  md10,
   base = T,
   delta = T,
-  mnames = models[1:7]
+  mnames = models
 )
 
 class(sel_md) <- "data.frame" #insert class at ictab
@@ -600,10 +743,11 @@ result_ltri <- cbind.data.frame(
 ) %>%
   filter(dAICc == 0)
 
-summ(md7)
+summ(md10)
 
-mod_ltri <- md7
+mod_ltri <- md10
 ```
+
 ## Indusium presence 
 
 ```{r}
@@ -612,6 +756,7 @@ models <- c(
   "ind ~ prec_seas, data = cwm_values",
   "ind ~ prec_seas + ann_prec, data = cwm_values",
   "ind ~ prec_seas * ann_prec, data = cwm_values",
+  "ind ~ prec_warm, data = cwm_values",
   "ind ~ 1"
 )
 
@@ -621,9 +766,9 @@ md2 <- lm(ind ~ prec_seas + plot_size + samp_size, data = cwm_values)
 
 md3 <- lm(ind ~ prec_seas + ann_prec + plot_size + samp_size, data = cwm_values)
 
-md4 <- lm(ind ~ prec_seas * ann_prec + plot_size + samp_size, data = cwm_values)
+md5 <- lm(ind ~ prec_warm + plot_size + samp_size, data = cwm_values)
 
-md5 <- lm(ind ~ 1 + samp_size + plot_size, data = cwm_values)
+md6 <- lm(ind ~ 1 + samp_size + plot_size, data = cwm_values)
 
 sel_md <- AICctab(
   md1,
@@ -631,9 +776,10 @@ sel_md <- AICctab(
   md3,
   md4,
   md5,
+  md6,
   base = T,
   delta = T,
-  mnames = models[1:5]
+  mnames = models
 ) #null model selected
 
 class(sel_md) <- "data.frame" #insert class at ictab
@@ -647,9 +793,10 @@ result_ind <- cbind.data.frame(
 ) %>%
   filter(., dAICc == 0)
 
-mod_ind <- md1
-summary(md1)
+mod_ind <- md5
+summary(md5)
 ```
+
 ## Laminae morphology 
 
 ```{r}
@@ -658,6 +805,7 @@ models <- c(
   "ldim ~ prec_seas, data = cwm_values",
   "ldim ~ prec_seas + ann_prec, data = cwm_values",
   "ldim ~ prec_seas * ann_prec, data = cwm_values",
+  "ldim ~ prec_warm, data = cwm_values",
   "ldim ~ 1"
 )
 
@@ -675,7 +823,12 @@ md4 <- lm(
   data = cwm_values
 )
 
-md5 <- lm(ldim ~ 1 + plot_size + samp_size, data = cwm_values)
+md5 <- lm(
+  ldim ~ prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md6 <- lm(ldim ~ 1 + plot_size + samp_size, data = cwm_values)
 
 sel_md <- AICctab(
   md1,
@@ -683,6 +836,7 @@ sel_md <- AICctab(
   md3,
   md4,
   md5,
+  md6,
   base = T,
   delta = T,
   mnames = models
@@ -703,11 +857,8 @@ summary(md2)
 
 mod_ldim <- md2
 ```
+
 ## Spore chlorophyll
-
-Spore chlorophyll has shorter life span than chlorophyll, but they are able to reach long-distance before germinate. 
-The shorter lifespan require more to the species reach it optimum habitat faster, therefore, with less environmental variation precipitation and soil rich.
-
 
 ```{r}
 models <- c(
@@ -719,6 +870,9 @@ models <- c(
   "chl ~ max_temp_wam + ann_prec, data = cwm_values",
   "chl ~ max_temp_wam + prec_seas, data = cwm_values",
   "chl ~ clay",
+  "chl ~ max_temp_wam + prec_warm, data = cwm_values",
+  "chl ~ max_temp_wam * prec_warm, data = cwm_values",
+  "chl ~ prec_warm, data = cwm_values",
   "chl ~ 1"
 )
 
@@ -736,7 +890,20 @@ md7 <- lm(
   data = cwm_values
 )
 md8 <- lm(chl ~ clay + plot_size + samp_size, data = cwm_values)
-md9 <- lm(chl ~ 1 + plot_size + samp_size, data = cwm_values)
+md9 <- lm(
+  chl ~ max_temp_wam + prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+md10 <- lm(
+  chl ~ max_temp_wam * prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+md11 <- lm(
+  chl ~ prec_warm + plot_size + samp_size,
+  data = cwm_values
+)
+
+md12 <- lm(chl ~ 1 + plot_size + samp_size, data = cwm_values)
 
 sel_md <- AICctab(
   md1,
@@ -748,11 +915,13 @@ sel_md <- AICctab(
   md7,
   md8,
   md9,
+  md10,
+  md11,
+  md12,
   base = T,
   delta = T,
   mnames = models
 )
-
 class(sel_md) <- "data.frame" #insert class at ictab
 
 sel_md
@@ -767,10 +936,13 @@ summary(md5)
 
 mod_chl <- md5
 ```
-# Output
+
+# Output (Table 1)
+
+We will export all best models as an Excel file using jtools. We will use this output as the main content of Appendix S11 and Table 1. 
 
 ```{r}
-# Export all best models to an Excel file using jtools
+
 jtools::export_summs(
   mod_diam,
   mod_lr,
@@ -798,9 +970,11 @@ jtools::export_summs(
   coefs = c(
     "Intercept" = "(Intercept)",
     "Soil's Nitrogen" = "nitrogen",
+    "Soil's CEC" = 'cec', 
     "Annual Rainfall" = "ann_prec",
-    "Rainfall Seasonallity" = "prec_seas",
-    "Annual Rainfall:Rainfall Seasonallity" = "ann_prec:prec_seas",
+    "Rainfall Seasonality" = "prec_seas",
+    "Rainfall Warmest Quarter" = "prec_warm",
+    "Annual Rainfall:Rainfall Seasonality" = "ann_prec:prec_seas",
     "Plot Size" = "plot_size",
     "Sample Effort" = "samp_size"
   ),
@@ -813,10 +987,10 @@ jtools::export_summs(
     "AIC",
     "df"
   ),
-  error_format = "p = {p.value}",
+  error_format = " ",
   bold_signif = 0.05,
   to.file = "xlsx",
-  file.name = "outputs/cwm_raw.xlsx"
+  file.name = here("outputs/cwm_raw.xlsx")
 )
 
 
@@ -832,7 +1006,7 @@ jtools::export_summs(
   mod_ldim,
   mod_chl)
 
-saveRDS(mod_list, file = 'outputs/list_raw_cwm_models.RDS')
+saveRDS(mod_list, file = here('outputs/list_raw_cwm_models.RDS'))
 
 #Creating data.frame for all results
 forw <- rbind(
@@ -878,18 +1052,101 @@ nice_mods <- result[-rows, ]
 bad_mods <- result[rows, ]
 
 dim(nice_mods) # 5 nice_mods
+
+# Exporting null models to add in the appendix
+jtools::export_summs(
+  mod_ltri,
+  mod_buds,
+  model.names = c(
+    "Lam. Pubescent",
+    "Proliferous Buds"),
+  digits = 3,
+  statistics = c(
+    R2 = "r.squared",
+    Fstatistic = {
+      'statistic'
+    },
+    "AIC",
+    "df"
+  ),
+  error_format = " ",
+  bold_signif = 0.05,
+  to.file = "xlsx",
+  file.name = here("outputs/cwm_raw_null.xlsx"))
+
 ```
-# Save data 
+
+# Save Data 
+
+Finally, we will save some intermediary step results to create plots and report in the manuscript.
 
 ```{r}
+# Save selected models and cwm results
 write.xlsx(
   x = list(cwm_values, result, nice_mods, bad_mods),
-  file = 'outputs/cwm_raw_results.xlsx',
+  file = here('outputs/cwm_raw_results.xlsx'),
   rowNames = T,
   overwrite = T
 )
 
-saveRDS(cwm_values, file = "data/cwm_values_raw.RDS")
-cwm_values <- readRDS("data/cwm_values_raw.RDS")
+# Save cwm per-site results as an RDS
+saveRDS(cwm_values, file = here("data/cwm_values_raw.RDS"))
+cwm_values <- readRDS(here("data/cwm_values_raw.RDS"))
 ```
- 
+
+# Model Robustness and Cook's Distance Diagnostics (Table 1; Appendix S12)
+
+Again, we will evaluate influential data points using Cook's distance and 
+calculate Kendall correlation with log-transformed sample area size. 
+
+We will use the results produced here as the Appendix S12 and in Table 1.
+
+```{r}
+cwm_values$cook_diam <- cooks.distance(mod_diam) 
+cwm_values$cook_rcomp <- cooks.distance(mod_rcomp) 
+cwm_values$cook_rcreep <- cooks.distance(mod_rcr) 
+cwm_values$cook_rlr <- cooks.distance(mod_lr) 
+cwm_values$cook_mseg <- cooks.distance(mod_lmseg) 
+cwm_values$cook_ind <- cooks.distance(mod_ind) 
+cwm_values$cook_dim <- cooks.distance(mod_ldim) 
+cwm_values$cook_chl <- cooks.distance(mod_chl) 
+
+# Get names of columns
+cook_cols <- c("cook_diam", "cook_rcomp", "cook_rcreep", "cook_rlr", 
+               "cook_mseg", "cook_ind", "cook_dim", "cook_chl")
+# Create the harmonized names to export the data
+names <- c("Rhiz. Diameter", "Rhiz. Compact", "Rhiz. Short-Creeping", 
+           "Rhiz. Long-Creeping", "Lam. Multipinnate", "Indusium presence", 
+           "Frond Dimorphism", "Spore Chlorophyll")
+
+# Compute Kendall results 
+kendall_results <- sapply(cwm_values[cook_cols], function(x) {
+  test <- cor.test(x, log10(cwm_values$samp_size), method = "kendall")
+  return(c(tau = test$estimate, p_value = test$p.value))
+})
+
+# Format results
+kendall_summary <- as.data.frame(t(kendall_results))
+round(kendall_summary, 3)
+
+# Plot results for visual inspection (Appendix S12) 
+tiff(file = here("figs/cook_raw_t.tiff"), width = 180, height = 100, units = "mm", res = 300)
+par(mfrow = c(2, 4), mar = c(4, 4, 2, 1)) 
+sapply(seq_along(cook_cols), function(i) {
+               col_name <- cook_cols[i]
+               name <- names[i]
+  plot(y=cwm_values[[col_name]], x=log10(cwm_values$samp_size),
+       cex.main = 0.8,
+       ylab = "Cook's Distance",
+       xlab = "Sample effort (log10)",
+       main = paste0(name, " (Raw)"),
+       pch = 19, col = rgb(0, 0, 0, 0.5),
+       ylim = c(0,2)
+  ) 
+  
+  # Add line in plots marking one Cook`s distance unit
+  abline(h = 1, col = "red", lty = 2)
+})
+dev.off()
+
+```
